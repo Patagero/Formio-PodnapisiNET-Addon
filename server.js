@@ -4,20 +4,22 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
+import puppeteer from "puppeteer";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 📂 mapa za začasne datoteke
 const STORAGE_DIR = path.join(process.cwd(), "data", "formio_podnapisi");
 if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
 // 📜 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.3.0",
+  version: "2.0.0",
   name: "Formio Podnapisi.NET",
-  description: "Samodejno iskanje slovenskih podnapisov iz podnapisi.net glede na film ali serijo v Stremiu",
+  description: "Samodejno iskanje slovenskih podnapisov iz podnapisi.net za filme in serije v Stremiu",
   logo: "https://www.podnapisi.net/favicon.ico",
   background: "https://www.podnapisi.net/images/background.jpg",
   types: ["movie", "series"],
@@ -26,40 +28,44 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// 🧠 Pretvori IMDb ID → naslov filma prek OMDb API
+// 🎬 IMDb ID → naslov
 async function getTitleFromIMDB(imdbID) {
   try {
-    const res = await fetch(`https://www.omdbapi.com/?i=${imdbID}&apikey=thewdb`);
-    const data = await res.json();
-    return data?.Title || imdbID;
+    const r = await fetch(`https://www.omdbapi.com/?i=${imdbID}&apikey=thewdb`);
+    const d = await r.json();
+    return d?.Title || imdbID;
   } catch {
     return imdbID;
   }
 }
 
-// 🔍 Išči podnapise po naslovu
+// 🔍 Išči podnapise z uporabo Puppeteer
 async function searchPodnapisi(title, lang = "sl") {
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${lang}`;
-  console.log(`🌍 Iščem na: ${searchUrl}`);
+  console.log(`🌍 Iščem z Puppeteer: ${searchUrl}`);
 
-  try {
-    const res = await fetch(searchUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0",
-        "Accept-Language": "sl,en;q=0.8",
-      }
-    });
-    const html = await res.text();
-    const matches = [...html.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)].map(m => m[0]);
-    console.log(`🔗 Najdenih povezav: ${matches.length}`);
-    return matches;
-  } catch (err) {
-    console.error("❌ Napaka pri iskanju:", err);
-    return [];
-  }
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
+
+  const page = await browser.newPage();
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+
+  // počakaj na tabelo rezultatov (če obstaja)
+  await page.waitForSelector(".table", { timeout: 15000 }).catch(() => {});
+
+  const links = await page.$$eval("a[href*='/sl/subtitles/']", as =>
+    as.map(a => a.getAttribute("href")).filter(h => h.includes("/download"))
+  );
+
+  await browser.close();
+
+  console.log(`🔗 Najdenih povezav: ${links.length}`);
+  return links;
 }
 
-// 🧩 Glavni route za Stremio
+// 🧩 Glavni Stremio route
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbID = req.params.id;
   const lang = "sl";
@@ -74,7 +80,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const movieDir = path.join(STORAGE_DIR, query);
   if (!fs.existsSync(movieDir)) fs.mkdirSync(movieDir, { recursive: true });
 
-  // Preveri ali že obstaja razpakiran .srt
   const existing = fs.readdirSync(movieDir).find(f => f.endsWith(".srt"));
   if (existing) {
     const fileUrl = `${req.protocol}://${req.get("host")}/files/${encodeURIComponent(query)}/${encodeURIComponent(existing)}`;

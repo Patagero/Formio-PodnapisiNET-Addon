@@ -7,11 +7,12 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "adm-zip": "^0.5.12",
+    "adm-zip": "^0.5.16",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
+    "express": "^4.21.2",
     "jsdom": "^27.1.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "puppeteer": "^24.27.0"
   }
 }
