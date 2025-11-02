@@ -4,6 +4,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
+import { JSDOM } from "jsdom";
 
 const app = express();
 app.use(cors());
@@ -16,7 +17,7 @@ if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
 // 📜 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.7",
+  version: "1.0.9",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -46,7 +47,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const movieDir = path.join(STORAGE_DIR, query);
     if (!fs.existsSync(movieDir)) fs.mkdirSync(movieDir, { recursive: true });
 
-    // Če že obstajajo razpakirani podnapisi
+    // Če podnapisi že obstajajo
     const existing = fs.readdirSync(movieDir).find(f => f.toLowerCase().endsWith(".srt"));
     if (existing) {
       const fileUrl = `${req.protocol}://${req.get("host")}/files/${encodeURIComponent(query)}/${encodeURIComponent(existing)}`;
@@ -58,22 +59,32 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       });
     }
 
-    // Sicer jih prenesi
+    // Išči na podnapisi.net
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}&language=${lang}`;
     const html = await (await fetch(searchUrl)).text();
+    const dom = new JSDOM(html);
+    const document = dom.window.document;
 
-    const match = html.match(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g);
-    if (!match || !match[0]) {
+    // Poišči vse vrstice tabele z rezultati
+    const rows = [...document.querySelectorAll("table tr")];
+    const links = rows
+      .map(row => {
+        const a = row.querySelector("a[href*='/sl/subtitles/']");
+        return a ? a.href : null;
+      })
+      .filter(Boolean);
+
+    if (links.length === 0) {
       console.log("⚠️ Ni bilo najdenih povezav.");
       return res.json({ subtitles: [] });
     }
 
-    const downloadLink = "https://www.podnapisi.net" + match[0];
-    console.log(`✅ Najden prenos: ${downloadLink}`);
+    const firstLink = "https://www.podnapisi.net" + links[0] + "/download";
+    console.log(`✅ Najden prenos: ${firstLink}`);
 
     // Prenesi ZIP
     const zipPath = path.join(movieDir, `${query}.zip`);
-    const zipBuf = Buffer.from(await (await fetch(downloadLink)).arrayBuffer());
+    const zipBuf = Buffer.from(await (await fetch(firstLink)).arrayBuffer());
     fs.writeFileSync(zipPath, zipBuf);
 
     // Razpakiraj ZIP
