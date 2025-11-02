@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.1.2",
+  version: "1.2.0",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -25,19 +25,21 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// 🔎 Pretvori IMDb ID → naslov filma (prek OMDb API)
+// 🔎 Pretvori IMDb ID → naslov filma (OMDb API)
 async function getTitleFromIMDb(imdbId) {
-  const apiKey = "thewdb"; // brezplačen demo ključ OMDb
+  const apiKey = "thewdb"; // brezplačen testni ključ
   const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (data && data.Title) {
-    console.log(`🎬 IMDb → naslov: ${data.Title}`);
-    return data.Title;
-  } else {
-    console.log("⚠️  IMDb API ni vrnil naslova.");
-    return imdbId;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data && data.Title) {
+      console.log(`🎬 IMDb → naslov: ${data.Title}`);
+      return data.Title;
+    }
+  } catch (err) {
+    console.log("⚠️ IMDb API ni vrnil naslova:", err.message);
   }
+  return imdbId;
 }
 
 async function getBrowser() {
@@ -65,26 +67,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto(searchUrl, { waitUntil: "networkidle0", timeout: 90000 });
 
-    let downloadLink = null;
-    try {
-      await page.waitForSelector("table tr a[href*='/download']", { timeout: 20000 });
-      downloadLink = await page.$eval("table tr a[href*='/download']", el => el.href);
-    } catch {
-      console.log("⚠️ Ni bilo mogoče najti povezave na seznamu.");
-    }
+    // počakaj na rezultate (tabela ali seznam)
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("table tr a[href*='/download'], a.download").length > 0,
+      { timeout: 12000 }
+    );
 
-    await browser.close();
-
-    if (!downloadLink) {
-      console.log("❌ Napaka: Ni bilo najdenih povezav.");
-      return res.json({ subtitles: [] });
-    }
+    const downloadLink = await page.$eval(
+      "table tr a[href*='/download'], a.download",
+      el => el.href
+    );
 
     console.log("✅ Najden prenos:", downloadLink);
+    await browser.close();
 
-    // 📦 Prenesi ZIP podnapisov
+    // 📦 Prenos ZIP-a
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
     const buf = Buffer.from(await zipRes.arrayBuffer());
@@ -117,11 +117,28 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     res.json({ subtitles: stream });
   } catch (err) {
     console.error("❌ Napaka:", err.message);
+
+    // Shrani HTML za analizo
+    const htmlDump = path.join(TMP_DIR, `${imdbId}.html`);
+    try {
+      const browser = await getBrowser();
+      const page = await browser.newPage();
+      const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
+        imdbId
+      )}&language=sl`;
+      await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+      fs.writeFileSync(htmlDump, await page.content());
+      await browser.close();
+      console.log(`📄 Shranil HTML v ${htmlDump}`);
+    } catch (dumpErr) {
+      console.log("⚠️ Neuspešno shranjevanje HTML:", dumpErr.message);
+    }
+
     res.json({ subtitles: [] });
   }
 });
 
-// 📂 Pošiljanje datotek
+// 📂 Stremio zahteva SRT datoteko
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
