@@ -3,9 +3,9 @@ import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
+import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import AdmZip from "adm-zip";
-import { execSync } from "child_process";
 
 const app = express();
 app.use(cors());
@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.7",
+  version: "1.1.0",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -25,49 +25,29 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-/** 🔧 Poskusi pridobiti ali namestiti Chromium */
-async function ensureChromium() {
-  const chromiumPath = "/tmp/chromium/chrome-linux64/chrome";
-  if (fs.existsSync(chromiumPath)) {
-    console.log("✅ Chromium že obstaja:", chromiumPath);
-    return chromiumPath;
-  }
+async function getBrowser() {
+  const executablePath = await chromium.executablePath();
 
-  console.log("📦 Chromium manjka — prenašam mini verzijo ...");
+  console.log("🧩 Chromium path:", executablePath || "(vgrajeni Puppeteer)");
 
-  // Prenesi uradni Chromium build (~45MB)
-  const url =
-    "https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1192060/chrome-linux64.zip";
-  const zipPath = "/tmp/chromium.zip";
-  const res = await fetch(url);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(zipPath, buf);
-
-  // Razpakiraj
-  execSync(`unzip -q ${zipPath} -d /tmp/chromium`);
-  fs.rmSync(zipPath);
-
-  console.log("✅ Chromium uspešno nameščen v /tmp/chromium");
-  return chromiumPath;
+  return puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless: chromium.headless,
+  });
 }
 
-/** 🔍 Glavna pot */
+// 🔍 Glavna pot
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id.replace("tt", "");
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", req.params.id);
 
   try {
-    const executablePath = await ensureChromium();
-    console.log("🧩 Uporabljam Chromium:", executablePath);
-
-    const browser = await puppeteer.launch({
-      headless: true,
-      executablePath,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-    });
-
+    const browser = await getBrowser();
     const page = await browser.newPage();
+
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
       imdbId
     )}&language=sl`;
@@ -119,7 +99,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
-/** 📂 Pošiljanje datotek */
+// 📂 Pošiljanje datotek
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
