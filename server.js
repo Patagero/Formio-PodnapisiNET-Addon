@@ -14,12 +14,14 @@ const LOGIN = {
   password: "Formio1978",
 };
 
+// 📁 Začasna mapa
 const TMP_DIR = path.join(process.env.TEMP || "./tmp", "formio_podnapisi");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
+// 📜 Manifest
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.3",
+  version: "1.0.4",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -30,12 +32,13 @@ const manifest = {
   idPrefixes: ["tt"],
 };
 
+// 🧩 Pridobi podnapise
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   let { id } = req.params;
   let query = id;
 
   try {
-    // Če ID izgleda kot IMDb ID, poberi naslov iz OMDb
+    // IMDb → naslov
     if (id.startsWith("tt")) {
       const omdbRes = await fetch(`https://www.omdbapi.com/?i=${id}&apikey=thewdb`);
       const omdbData = await omdbRes.json();
@@ -56,7 +59,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const cookies = loginRes.headers.get("set-cookie") || "";
     console.log(`🍪 Prijava uspešna: ${cookies.includes("PHPSESSID")}`);
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}&movie_type=`;
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}`;
     console.log(`🔍 Iščem: ${searchUrl}`);
 
     const response = await fetch(searchUrl, { headers: { Cookie: cookies } });
@@ -89,11 +92,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const srtPath = path.join(extractDir, srtFile);
     console.log(`📜 Najden SRT: ${srtFile}`);
 
+    // 🔗 Ustvari HTTP povezavo za Stremio
+    const fileUrl = `${req.protocol}://${req.get("host")}/files/${encodeURIComponent(query)}/${encodeURIComponent(srtFile)}`;
+
     res.json({
       subtitles: [
         {
           id: "formio-podnapisi",
-          url: `file://${srtPath}`,
+          url: fileUrl,
           lang: "sl",
           name: "Formio Podnapisi.NET",
         },
@@ -105,8 +111,21 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
+// 🗂 Strežnik za serviranje .srt datotek
+app.get("/files/:movie/:file", (req, res) => {
+  const filePath = path.join(TMP_DIR, req.params.movie, req.params.file);
+  if (fs.existsSync(filePath)) {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("Subtitle not found");
+  }
+});
+
+// 📜 Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
+// 🚀 Zaženi strežnik
 const PORT = process.env.PORT || 7760;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
