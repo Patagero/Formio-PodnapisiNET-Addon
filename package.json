@@ -1,6 +1,6 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Formio Podnapisi.NET Addon za Stremio",
   "main": "server.js",
   "type": "module",
@@ -8,7 +8,6 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@sparticuz/chromium-min": "^119.0.2",
     "adm-zip": "^0.5.12",
     "cors": "^2.8.5",
     "express": "^4.19.2",
