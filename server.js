@@ -9,19 +9,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const LOGIN = {
-  username: "patagero",
-  password: "Formio1978",
-};
-
 // 📁 Začasna mapa
-const TMP_DIR = path.join(process.env.TEMP || "./tmp", "formio_podnapisi");
+const TMP_DIR = path.join(process.cwd(), "tmp", "formio_podnapisi");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 // 📜 Manifest
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.4",
+  version: "1.0.5",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -34,40 +29,27 @@ const manifest = {
 
 // 🧩 Pridobi podnapise
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
-  let { id } = req.params;
+  const { id } = req.params;
   let query = id;
+  const lang = "sl";
 
   try {
     // IMDb → naslov
     if (id.startsWith("tt")) {
       const omdbRes = await fetch(`https://www.omdbapi.com/?i=${id}&apikey=thewdb`);
       const omdbData = await omdbRes.json();
-      if (omdbData?.Title) {
-        query = omdbData.Title;
-        console.log(`🎬 IMDb → naslov: ${query}`);
-      }
+      if (omdbData?.Title) query = omdbData.Title;
     }
 
-    console.log("🔐 Prijava na Podnapisi.net ...");
-    const loginRes = await fetch("https://www.podnapisi.net/sl/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `username=${LOGIN.username}&password=${LOGIN.password}`,
-      redirect: "manual",
-    });
+    console.log(`🔍 Iščem podnapise za: ${query}`);
 
-    const cookies = loginRes.headers.get("set-cookie") || "";
-    console.log(`🍪 Prijava uspešna: ${cookies.includes("PHPSESSID")}`);
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}&language=${lang}`;
+    const html = await (await fetch(searchUrl)).text();
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}`;
-    console.log(`🔍 Iščem: ${searchUrl}`);
-
-    const response = await fetch(searchUrl, { headers: { Cookie: cookies } });
-    const html = await response.text();
-
+    // Poišči prvi link za download
     const match = html.match(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g);
     if (!match || !match[0]) {
-      console.log("⚠️  Ni bilo najdenih povezav v HTML-ju.");
+      console.log("⚠️ Ni bilo najdenih povezav.");
       return res.json({ subtitles: [] });
     }
 
@@ -75,24 +57,25 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     console.log(`✅ Najden prenos: ${downloadLink}`);
 
     const zipPath = path.join(TMP_DIR, `${query}.zip`);
-    const zipRes = await fetch(downloadLink, { headers: { Cookie: cookies } });
-    const buf = Buffer.from(await zipRes.arrayBuffer());
-    fs.writeFileSync(zipPath, buf);
+    const zipBuf = Buffer.from(await (await fetch(downloadLink)).arrayBuffer());
+    fs.writeFileSync(zipPath, zipBuf);
 
-    const zip = new AdmZip(zipPath);
+    // Razpakiraj ZIP
     const extractDir = path.join(TMP_DIR, query);
+    const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
 
-    const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
+    // Poišči prvo .srt datoteko
+    const srtFile = fs.readdirSync(extractDir).find(f => f.toLowerCase().endsWith(".srt"));
     if (!srtFile) {
-      console.log("⚠️  Ni .srt datoteke v ZIP-u.");
+      console.log("⚠️ Ni .srt datoteke v ZIP-u.");
       return res.json({ subtitles: [] });
     }
 
     const srtPath = path.join(extractDir, srtFile);
     console.log(`📜 Najden SRT: ${srtFile}`);
 
-    // 🔗 Ustvari HTTP povezavo za Stremio
+    // 🔗 HTTP dostopen URL za Stremio
     const fileUrl = `${req.protocol}://${req.get("host")}/files/${encodeURIComponent(query)}/${encodeURIComponent(srtFile)}`;
 
     res.json({
@@ -106,19 +89,25 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       ],
     });
   } catch (err) {
-    console.error("❌ Napaka pri obdelavi:", err);
+    console.error("❌ Napaka:", err);
     res.json({ subtitles: [] });
   }
 });
 
 // 🗂 Strežnik za serviranje .srt datotek
-app.get("/files/:movie/:file", (req, res) => {
-  const filePath = path.join(TMP_DIR, req.params.movie, req.params.file);
-  if (fs.existsSync(filePath)) {
+app.get("/files/:movie/:file", async (req, res) => {
+  try {
+    const filePath = path.join(TMP_DIR, req.params.movie, req.params.file);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send("❌ Subtitle not found");
+    }
+
+    const content = fs.readFileSync(filePath, "utf-8");
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.sendFile(filePath);
-  } else {
-    res.status(404).send("Subtitle not found");
+    res.send(content);
+  } catch (err) {
+    console.error("❌ Napaka pri pošiljanju datoteke:", err);
+    res.status(500).send("Internal Server Error");
   }
 });
 
