@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.1.1",
+  version: "1.1.2",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -24,6 +24,21 @@ const manifest = {
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
+// 🔎 Pretvori IMDb ID → naslov filma (prek OMDb API)
+async function getTitleFromIMDb(imdbId) {
+  const apiKey = "thewdb"; // brezplačen demo ključ OMDb
+  const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data && data.Title) {
+    console.log(`🎬 IMDb → naslov: ${data.Title}`);
+    return data.Title;
+  } else {
+    console.log("⚠️  IMDb API ni vrnil naslova.");
+    return imdbId;
+  }
+}
 
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
@@ -36,33 +51,28 @@ async function getBrowser() {
 }
 
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
-  const imdbId = req.params.id.replace("tt", "");
+  const imdbId = req.params.id;
   console.log("==================================================");
-  console.log("🎬 Prejemam zahtevo za IMDb:", req.params.id);
+  console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
+
+  const title = await getTitleFromIMDb(imdbId);
+  const query = encodeURIComponent(title);
 
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(imdbId)}&language=sl`;
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-    // poskusimo najprej selector
     let downloadLink = null;
     try {
-      await page.waitForSelector("table tr a[href*='/download']", { timeout: 15000 });
+      await page.waitForSelector("table tr a[href*='/download']", { timeout: 20000 });
       downloadLink = await page.$eval("table tr a[href*='/download']", el => el.href);
-    } catch (e1) {
-      console.log("⚠️  Prvi selector ni našel, poskušam alternativni selector");
-      try {
-        // alternativa: gumb ali link z ".zip" ali "Download subtitles"
-        await page.waitForSelector("a[href*='download'] .download", { timeout: 15000 });
-        downloadLink = await page.$eval("a[href*='download']", el => el.href);
-      } catch (e2) {
-        console.log("❌ Selector ni deloval:", e2.message);
-      }
+    } catch {
+      console.log("⚠️ Ni bilo mogoče najti povezave na seznamu.");
     }
 
     await browser.close();
@@ -74,20 +84,18 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
     console.log("✅ Najden prenos:", downloadLink);
 
+    // 📦 Prenesi ZIP podnapisov
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
-    if (!zipRes.ok) {
-      console.log("❌ Napaka pri prenosu ZIP:", zipRes.status);
-      return res.json({ subtitles: [] });
-    }
     const buf = Buffer.from(await zipRes.arrayBuffer());
     fs.writeFileSync(zipPath, buf);
 
+    // 📂 Razpakiraj ZIP
     const extractDir = path.join(TMP_DIR, imdbId);
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
 
-    const srtFile = fs.readdirSync(extractDir).find(f => f.toLowerCase().endsWith(".srt"));
+    const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
     if (!srtFile) {
       console.log("⚠️ Ni .srt datoteke v ZIP-u.");
       return res.json({ subtitles: [] });
@@ -98,7 +106,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const stream = [
       {
         id: "formio-podnapisi",
-        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(srtFile)}`,
+        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(
+          srtFile
+        )}`,
         lang: "sl",
         name: "Formio Podnapisi.NET"
       }
@@ -111,6 +121,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
+// 📂 Pošiljanje datotek
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
