@@ -4,7 +4,6 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
-import { JSDOM } from "jsdom";
 
 const app = express();
 app.use(cors());
@@ -17,7 +16,7 @@ if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
 // 📜 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.9",
+  version: "1.1.0",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -28,7 +27,29 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// 🧩 Glavna funkcija za pridobivanje podnapisov
+// 🎯 Funkcija za iskanje prek njihovega JSON API-ja
+async function searchPodnapisi(query, lang = "sl") {
+  const apiUrl = `https://www.podnapisi.net/subtitles/search/advanced?keywords=${encodeURIComponent(query)}&language=${lang}&movie_type=&seasons=&episodes=&year=`;
+  const res = await fetch(apiUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json, text/javascript, */*; q=0.01",
+    },
+  });
+
+  if (!res.ok) {
+    console.log("⚠️ API ni dostopen:", res.status);
+    return [];
+  }
+
+  const text = await res.text();
+
+  // Poskusimo razbrati povezave iz JSON ali HTML fallbacka
+  const matchLinks = [...text.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)].map(m => m[0]);
+  return matchLinks;
+}
+
+// 🧩 Glavna pot za pridobivanje podnapisov
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const { id } = req.params;
   let query = id;
@@ -47,8 +68,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const movieDir = path.join(STORAGE_DIR, query);
     if (!fs.existsSync(movieDir)) fs.mkdirSync(movieDir, { recursive: true });
 
-    // Če podnapisi že obstajajo
-    const existing = fs.readdirSync(movieDir).find(f => f.toLowerCase().endsWith(".srt"));
+    // Preveri, če obstaja lokalna .srt datoteka
+    const existing = fs.readdirSync(movieDir).find(f => f.endsWith(".srt"));
     if (existing) {
       const fileUrl = `${req.protocol}://${req.get("host")}/files/${encodeURIComponent(query)}/${encodeURIComponent(existing)}`;
       console.log(`📜 Najdeni lokalni podnapisi: ${existing}`);
@@ -59,39 +80,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       });
     }
 
-    // Išči na podnapisi.net
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(query)}&language=${lang}`;
-    const html = await (await fetch(searchUrl)).text();
-    const dom = new JSDOM(html);
-    const document = dom.window.document;
-
-    // Poišči vse vrstice tabele z rezultati
-    const rows = [...document.querySelectorAll("table tr")];
-    const links = rows
-      .map(row => {
-        const a = row.querySelector("a[href*='/sl/subtitles/']");
-        return a ? a.href : null;
-      })
-      .filter(Boolean);
-
-    if (links.length === 0) {
-      console.log("⚠️ Ni bilo najdenih povezav.");
+    // 🔎 Poišči nove povezave
+    const links = await searchPodnapisi(query, lang);
+    if (!links.length) {
+      console.log("⚠️ Ni bilo najdenih povezav v API odgovoru.");
       return res.json({ subtitles: [] });
     }
 
-    const firstLink = "https://www.podnapisi.net" + links[0] + "/download";
-    console.log(`✅ Najden prenos: ${firstLink}`);
+    const first = "https://www.podnapisi.net" + links[0];
+    console.log(`✅ Najden prenos: ${first}`);
 
-    // Prenesi ZIP
+    // 📦 Prenesi in razpakiraj ZIP
     const zipPath = path.join(movieDir, `${query}.zip`);
-    const zipBuf = Buffer.from(await (await fetch(firstLink)).arrayBuffer());
+    const zipBuf = Buffer.from(await (await fetch(first)).arrayBuffer());
     fs.writeFileSync(zipPath, zipBuf);
 
-    // Razpakiraj ZIP
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(movieDir, true);
 
-    // Najdi .srt datoteko
     const srtFile = fs.readdirSync(movieDir).find(f => f.toLowerCase().endsWith(".srt"));
     if (!srtFile) {
       console.log("⚠️ Ni .srt datoteke v ZIP-u.");
@@ -112,32 +118,20 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
-// 🗂 Strežnik za pošiljanje .srt datotek
+// 🗂 Strežnik za pošiljanje datotek
 app.get("/files/:movie/:file", (req, res) => {
-  try {
-    const absolutePath = path.resolve(STORAGE_DIR, req.params.movie, req.params.file);
-    if (!fs.existsSync(absolutePath)) {
-      console.log("❌ Subtitle not found:", absolutePath);
-      return res.status(404).send("❌ Subtitle not found");
-    }
-
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.sendFile(absolutePath, err => {
-      if (err) {
-        console.error("❌ Napaka pri pošiljanju:", err);
-        res.status(500).send("Internal Server Error");
-      }
-    });
-  } catch (err) {
-    console.error("❌ Napaka pri dostopu do datoteke:", err);
-    res.status(500).send("Internal Server Error");
+  const abs = path.resolve(STORAGE_DIR, req.params.movie, req.params.file);
+  if (!fs.existsSync(abs)) {
+    return res.status(404).send("❌ Subtitle not found");
   }
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.sendFile(abs);
 });
 
 // 📜 Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// 🚀 Zaženi strežnik
+// 🚀 Strežnik
 const PORT = process.env.PORT || 7760;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
