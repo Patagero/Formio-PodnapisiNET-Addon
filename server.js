@@ -13,7 +13,7 @@ app.use(express.json());
 // 🔧 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.2",
+  version: "1.0.4",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -27,41 +27,64 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
+// 🧠 Helper funkcija za izbiro Chromiuma (Render, Vercel, lokalno)
+function getChromiumPath() {
+  const possible = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  ];
+  for (const path of possible) {
+    if (path && fs.existsSync(path)) return path;
+  }
+  return null;
+}
+
 // 🔍 Glavna pot
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id.replace("tt", "");
+  console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", req.params.id);
 
   try {
-    // --- 1️⃣ Odpri podnapisi.net z Puppeteer ---
+    // 🚀 Zaženemo Puppeteer
+    const executablePath = getChromiumPath();
+    console.log("🧩 Uporabljam Chromium path:", executablePath || "(vgrajeni Puppeteer)");
+
     const browser = await puppeteer.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+      executablePath: executablePath || undefined,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
     });
 
     const page = await browser.newPage();
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(imdbId)}&language=sl`;
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
+      imdbId
+    )}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForSelector("table tr a[href*='/download']", { timeout: 10000 });
+    await page.waitForSelector("table tr a[href*='/download']", { timeout: 15000 });
 
-    // --- 2️⃣ Najdi prvo povezavo za prenos ---
+    // 📥 Poberemo prvi prenos
     const downloadLink = await page.$eval("table tr a[href*='/download']", el => el.href);
     console.log("✅ Najden prenos:", downloadLink);
     await browser.close();
 
-    // --- 3️⃣ Prenesi ZIP ---
+    // 📦 Prenesi ZIP
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
     const buf = Buffer.from(await zipRes.arrayBuffer());
     fs.writeFileSync(zipPath, buf);
 
-    // --- 4️⃣ Razpakiraj ZIP ---
+    // 📂 Razpakiraj ZIP
     const extractDir = path.join(TMP_DIR, imdbId);
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
 
+    // 🔎 Poišči prvo .srt datoteko
     const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
     if (!srtFile) {
       console.log("⚠️ Ni .srt datoteke v ZIP-u.");
@@ -71,11 +94,13 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const srtPath = path.join(extractDir, srtFile);
     console.log("📜 Najden SRT:", srtFile);
 
-    // --- 5️⃣ JSON odgovor za Stremio ---
+    // 🔁 Stremio JSON
     const stream = [
       {
         id: "formio-podnapisi",
-        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(srtFile)}`,
+        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(
+          srtFile
+        )}`,
         lang: "sl",
         name: "Formio Podnapisi.NET"
       }
@@ -88,11 +113,11 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
-// 📂 Strežba razpakiranih datotek (.srt)
+// 📂 Pošiljanje SRT datotek
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
+    res.sendFile(filePath, { root: process.cwd() });
   } else {
     res.status(404).send("Subtitle not found");
   }

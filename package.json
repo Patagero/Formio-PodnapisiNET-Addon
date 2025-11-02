@@ -1,12 +1,12 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Formio Podnapisi.NET Addon za Stremio - samodejno iskanje slovenskih podnapisov s podnapisi.net",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "postinstall": "echo 'Render environment - skipping puppeteer install'"
   },
   "dependencies": {
     "adm-zip": "^0.5.12",
