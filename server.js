@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.1.0",
+  version: "1.1.1",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -27,9 +27,6 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
-
-  console.log("🧩 Chromium path:", executablePath || "(vgrajeni Puppeteer)");
-
   return puppeteer.launch({
     args: chromium.args,
     defaultViewport: chromium.defaultViewport,
@@ -38,7 +35,6 @@ async function getBrowser() {
   });
 }
 
-// 🔍 Glavna pot
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id.replace("tt", "");
   console.log("==================================================");
@@ -48,31 +44,50 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const browser = await getBrowser();
     const page = await browser.newPage();
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
-      imdbId
-    )}&language=sl`;
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(imdbId)}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForSelector("table tr a[href*='/download']", { timeout: 30000 });
 
-    const downloadLink = await page.$eval("table tr a[href*='/download']", el => el.href);
-    console.log("✅ Najden prenos:", downloadLink);
+    // poskusimo najprej selector
+    let downloadLink = null;
+    try {
+      await page.waitForSelector("table tr a[href*='/download']", { timeout: 15000 });
+      downloadLink = await page.$eval("table tr a[href*='/download']", el => el.href);
+    } catch (e1) {
+      console.log("⚠️  Prvi selector ni našel, poskušam alternativni selector");
+      try {
+        // alternativa: gumb ali link z ".zip" ali "Download subtitles"
+        await page.waitForSelector("a[href*='download'] .download", { timeout: 15000 });
+        downloadLink = await page.$eval("a[href*='download']", el => el.href);
+      } catch (e2) {
+        console.log("❌ Selector ni deloval:", e2.message);
+      }
+    }
+
     await browser.close();
 
-    // 📦 Prenesi ZIP podnapisov
+    if (!downloadLink) {
+      console.log("❌ Napaka: Ni bilo najdenih povezav.");
+      return res.json({ subtitles: [] });
+    }
+
+    console.log("✅ Najden prenos:", downloadLink);
+
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
+    if (!zipRes.ok) {
+      console.log("❌ Napaka pri prenosu ZIP:", zipRes.status);
+      return res.json({ subtitles: [] });
+    }
     const buf = Buffer.from(await zipRes.arrayBuffer());
     fs.writeFileSync(zipPath, buf);
 
-    // 📂 Razpakiraj ZIP
     const extractDir = path.join(TMP_DIR, imdbId);
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
 
-    // 🔎 Poišči prvo .srt datoteko
-    const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
+    const srtFile = fs.readdirSync(extractDir).find(f => f.toLowerCase().endsWith(".srt"));
     if (!srtFile) {
       console.log("⚠️ Ni .srt datoteke v ZIP-u.");
       return res.json({ subtitles: [] });
@@ -80,13 +95,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
     console.log("📜 Najden SRT:", srtFile);
 
-    // 🔁 JSON odgovor za Stremio
     const stream = [
       {
         id: "formio-podnapisi",
-        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(
-          srtFile
-        )}`,
+        url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(srtFile)}`,
         lang: "sl",
         name: "Formio Podnapisi.NET"
       }
@@ -99,7 +111,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
-// 📂 Pošiljanje datotek
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
