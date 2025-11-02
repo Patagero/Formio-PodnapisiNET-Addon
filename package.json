@@ -1,7 +1,7 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "1.0.5",
-  "description": "Formio Podnapisi.NET Addon za Stremio - samodejno iskanje slovenskih podnapisov s podnapisi.net",
+  "version": "1.0.6",
+  "description": "Formio Podnapisi.NET Addon za Stremio",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -17,7 +17,5 @@
   },
   "engines": {
     "node": ">=20.x"
-  },
-  "author": "Denis Cunja (Formio)",
-  "license": "MIT"
+  }
 }

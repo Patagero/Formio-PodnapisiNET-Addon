@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.0.5",
+  version: "1.0.6",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -25,6 +25,24 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
+// 🧠 Helper funkcija za ugotovitev poti do Chromiuma
+async function getChromiumExecutable() {
+  try {
+    const execPath = await chromium.executablePath();
+    if (fs.existsSync(execPath)) return execPath;
+  } catch (_) {}
+  // Fallbacki
+  const candidates = [
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  ];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  console.warn("⚠️  Chromium binarni path ni bil najden, poskušam fallback...");
+  return null;
+}
+
 // 🔍 Glavna pot
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id.replace("tt", "");
@@ -32,14 +50,13 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("🎬 Prejemam zahtevo za IMDb:", req.params.id);
 
   try {
-    // 🚀 Puppeteer z @sparticuz/chromium-min (Render compatible)
-    const executablePath = await chromium.executablePath();
-    console.log("🧩 Chromium path:", executablePath);
+    const execPath = await getChromiumExecutable();
+    console.log("🧩 Chromium path:", execPath || "(vgrajeni Puppeteer)");
 
     const browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath,
+      executablePath: execPath || chromium.executablePath(),
       headless: chromium.headless,
     });
 
