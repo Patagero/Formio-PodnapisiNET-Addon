@@ -1,18 +1,23 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "1.0.0",
-  "type": "module",
+  "version": "1.0.2",
+  "description": "Formio Podnapisi.NET Addon za Stremio - samodejno iskanje slovenskih podnapisov s podnapisi.net",
   "main": "server.js",
+  "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16",
-    "cheerio": "^1.1.2",
+    "adm-zip": "^0.5.12",
     "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "jsdom": "^27.1.0",
+    "express": "^4.19.2",
     "node-fetch": "^3.3.2",
-    "puppeteer": "^24.27.0"
-  }
+    "puppeteer": "^23.7.0"
+  },
+  "engines": {
+    "node": ">=20.x"
+  },
+  "author": "Denis Cunja (Formio)",
+  "license": "MIT"
 }
