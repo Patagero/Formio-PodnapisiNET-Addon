@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "4.2.0",
+  version: "4.3.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise s podnapisi.net (login pred iskanjem + cache)",
+  description: "Samodejno išče slovenske podnapise s podnapisi.net (login pred iskanjem + stabilno prijavljanje)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -29,11 +29,11 @@ const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// 🔐 Prijava v podnapisi.net
+// 🔐 Prijava v podnapisi.net (stabilna + fallback)
 async function performLogin(browser) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
 
-  // Če obstajajo piškotki, jih uporabimo
+  // Če obstajajo piškotki, preskočimo prijavo
   if (fs.existsSync(cookiesPath)) {
     console.log("🍪 Piškotki obstajajo, preskočim prijavo.");
     return JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
@@ -41,32 +41,57 @@ async function performLogin(browser) {
 
   console.log("🔐 Prijavljam se v podnapisi.net ...");
   const page = await browser.newPage();
-  await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   try {
-    await page.waitForSelector("form[action*='login']", { timeout: 15000 });
-    await page.type("input[name='username'], #username", USERNAME, { delay: 30 });
-    await page.type("input[name='password'], #password", PASSWORD, { delay: 30 });
+    // počakamo, da se login form naloži
+    await page.waitForSelector("form[action*='login']", { timeout: 20000 });
+    await page.type("input[name='username'], #username", USERNAME, { delay: 25 });
+    await page.type("input[name='password'], #password", PASSWORD, { delay: 25 });
 
-    // klik na prijavni gumb
-    const loginButton =
-      (await page.$("button[type='submit']")) ||
-      (await page.$("input[type='submit']")) ||
-      (await page.$("button.btn")) ||
-      (await page.$("form button"));
+    // poskusi klikniti več različnih gumbov
+    const selectors = [
+      "button[type='submit']",
+      "input[type='submit']",
+      "button.btn-primary",
+      "form button",
+      ".btn.btn-success",
+      "button.login",
+    ];
 
-    if (loginButton) {
-      await loginButton.click();
-      console.log("➡️ Klik na gumb za prijavo");
+    let clicked = false;
+    for (const sel of selectors) {
+      const btn = await page.$(sel);
+      if (btn) {
+        await btn.click();
+        console.log(`➡️ Klik na gumb ${sel}`);
+        clicked = true;
+        break;
+      }
     }
 
-    // čakamo na znak, da je uporabnik prijavljen
+    // če gumb ne obstaja → pošlji ročni POST
+    if (!clicked) {
+      console.log("⚠️ Gumb za prijavo ni najden — pošiljam ročni POST ...");
+      await page.evaluate(
+        async (user, pass) => {
+          const form = new FormData();
+          form.append("username", user);
+          form.append("password", pass);
+          await fetch("/sl/login", { method: "POST", body: form, credentials: "include" });
+        },
+        USERNAME,
+        PASSWORD
+      );
+    }
+
+    // čakamo na znak prijave
     await page.waitForFunction(
       () =>
         document.body.innerText.includes("Odjava") ||
         document.body.innerText.includes("Moj profil") ||
         document.body.innerText.includes("patagero"),
-      { timeout: 60000 }
+      { timeout: 30000 }
     );
 
     console.log("✅ Prijava uspešna");
@@ -74,8 +99,8 @@ async function performLogin(browser) {
     fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
     await page.close();
     return cookies;
-  } catch (e) {
-    console.log("⚠️ Napaka pri prijavi:", e.message);
+  } catch (err) {
+    console.log("⚠️ Napaka pri prijavi:", err.message);
     await page.close();
     return [];
   }
@@ -106,16 +131,16 @@ async function getBrowser() {
   });
 }
 
-// 🧠 Iskanje podnapisov
+// 🧠 Glavna funkcija za iskanje
 async function scrapeAndSave(imdbId) {
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
   const browser = await getBrowser();
 
-  // 🔐 1️⃣ najprej login
+  // 1️⃣ Najprej login
   const cookies = await performLogin(browser);
 
-  // 🔎 2️⃣ nato odpremo iskanje
+  // 2️⃣ Nato iskanje
   const page = await browser.newPage();
   if (cookies?.length) await page.setCookie(...cookies);
 
