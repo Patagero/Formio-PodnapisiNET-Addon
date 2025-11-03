@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "3.4.0",
+  version: "3.5.0",
   name: "Formio Podnapisi.NET 🇸🇮",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -31,7 +31,7 @@ const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// 🧹 počisti stare datoteke (2 dni)
+// 🧹 Počisti stare datoteke (2 dni)
 function cleanupOldFiles() {
   const cutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
   for (const dir of [TMP_DIR]) {
@@ -46,7 +46,7 @@ function cleanupOldFiles() {
 }
 cleanupOldFiles();
 
-// ⚡ cache (24 ur)
+// ⚡ Cache (24 ur)
 function getCache(imdbId) {
   const file = path.join(CACHE_DIR, imdbId + ".json");
   if (fs.existsSync(file)) {
@@ -62,9 +62,10 @@ function saveCache(imdbId, data) {
   fs.writeFileSync(path.join(CACHE_DIR, imdbId + ".json"), JSON.stringify(data, null, 2));
 }
 
-// 🔐 prijava (robustna)
+// 🔐 Prijava - robustna verzija
 async function ensureLoggedIn(page) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
+
   if (fs.existsSync(cookiesPath)) {
     const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
     await page.setCookie(...cookies);
@@ -109,6 +110,7 @@ async function ensureLoggedIn(page) {
         document.body.innerText.includes("patagero"),
       { timeout: 30000 }
     );
+
     console.log("✅ Prijava uspešna.");
   } catch (err) {
     console.log("⚠️ Napaka ali počasno nalaganje login strani:", err.message);
@@ -161,10 +163,11 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+
+  await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 20000 });
 
   try {
-    await page.waitForSelector("table.table tbody tr", { timeout: 20000 });
+    await page.waitForSelector("table.table tbody tr", { timeout: 8000 });
 
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows
@@ -237,6 +240,18 @@ app.get("/files/:id/:file", (req, res) => {
 
 // 📜 manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
+
+// ⚡ Pre-cache najbolj iskane naslove
+const PRELOAD_IDS = ["tt0120338", "tt0133093", "tt1375666"];
+(async () => {
+  for (const id of PRELOAD_IDS) {
+    const cached = getCache(id);
+    if (!cached) {
+      console.log(`⚡ Pre-caching ${id} ...`);
+      await fetch(`https://formio-podnapisinet-addon-1.onrender.com/subtitles/movie/${id}.json`);
+    }
+  }
+})();
 
 // 🚀 zagon
 const PORT = process.env.PORT || 10000;
