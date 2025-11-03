@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.8.0",
-  name: "Formio Podnapisi.NET",
-  description: "Samodejno iskanje slovenskih in angleških podnapisov s podnapisi.net (optimizirano in hitro)",
+  version: "2.0.0",
+  name: "Formio Podnapisi.NET 🇸🇮",
+  description: "Iskanje in prenos slovenskih podnapisov s podnapisi.net (brez angleških, hitro delovanje)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -25,10 +25,10 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// 🧠 Preprost cache
+// 🔹 Enostaven cache (da se isti film ne išče večkrat)
 const CACHE = new Map();
 const cacheGet = k => CACHE.get(k);
-const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 30) CACHE.delete([...CACHE.keys()][0]); };
+const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 20) CACHE.delete([...CACHE.keys()][0]); };
 
 // 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
@@ -44,6 +44,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
+// 🧩 Puppeteer browser setup
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -68,76 +69,60 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
 
-  async function searchSubtitles(language) {
+  // 🔍 Iskanje SAMO slovenskih podnapisov
+  async function searchSlovene() {
     const browser = await getBrowser();
     const page = await browser.newPage();
-
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    );
-
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}`;
-    console.log(`🌍 Iščem (${language}): ${searchUrl}`);
+    console.log(`🌍 Iščem (samo slovenske): ${searchUrl}`);
+
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
     try {
-      await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
+      await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 10000 });
     } catch {
-      console.log("⚠️ Timeout pri nalaganju strani");
+      console.log("⚠️ Napaka pri nalaganju strani");
     }
 
-    // Klikni "Slovenščina", če obstaja
-    if (language === "sl") {
-      try {
-        await page.waitForSelector("input[id*='sl'] + label, label[for*='sl']", { timeout: 2000 });
-        await page.click("input[id*='sl'] + label, label[for*='sl']");
-        await page.waitForTimeout(1200);
-        console.log("🇸🇮 Filter 'Slovenščina' aktiviran");
-      } catch {
-        console.log("⚠️ Ni bilo mogoče klikniti 'Slovenščina'");
-      }
-    }
-
-    let downloadLink = null;
-    const selectors = [
-      "table a[href*='/download']",
-      "a[href*='/download']",
-      ".downloads a"
-    ];
-
-    for (const sel of selectors) {
-      try {
-        const found = await page.$eval(sel, el => el.href);
-        if (found) {
-          downloadLink = found;
-          console.log(`✅ Najden prenos (${language}): ${found}`);
-          break;
+    // Klik filter “Slovenščina” - tudi, če ni viden
+    try {
+      await page.evaluate(() => {
+        const checkbox = document.querySelector("input[id*='sl']");
+        if (checkbox && !checkbox.checked) {
+          checkbox.checked = true;
+          checkbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
-      } catch {}
+      });
+      await page.waitForTimeout(1000);
+      console.log("🇸🇮 Filter 'Slovenščina' aktiviran (JS)");
+    } catch {
+      console.log("⚠️ Ni bilo mogoče aktivirati filtra 'Slovenščina'");
     }
 
-    if (!downloadLink) {
-      console.log("⚠️ Regex fallback ...");
+    // Poišči povezavo za prenos
+    let downloadLink = null;
+    try {
+      downloadLink = await page.$eval("a[href*='/download']", el => el.href);
+      console.log(`✅ Najden prenos: ${downloadLink}`);
+    } catch {
       const html = await page.content();
-      const match = html.match(/\/[a-z]{2}\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/);
-      if (match) downloadLink = "https://www.podnapisi.net" + match[0];
+      const match = html.match(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/);
+      if (match) {
+        downloadLink = "https://www.podnapisi.net" + match[0];
+        console.log(`✅ Najden (regex): ${downloadLink}`);
+      } else {
+        console.log("❌ Ni najdenih slovenskih podnapisov");
+      }
     }
 
     await browser.close();
     return downloadLink;
   }
 
-  let downloadLink = await searchSubtitles("sl");
-  if (!downloadLink) {
-    console.log("⚠️ Ni slovenskih podnapisov, iščem angleške...");
-    downloadLink = await searchSubtitles("en");
-  }
+  const downloadLink = await searchSlovene();
+  if (!downloadLink) return res.json({ subtitles: [] });
 
-  if (!downloadLink) {
-    console.log("❌ Ni bilo mogoče najti povezave za prenos.");
-    return res.json({ subtitles: [] });
-  }
-
-  // 📦 Prenesi ZIP in razpakiraj
+  // 📦 Prenos ZIP in razpakiranje
   try {
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
@@ -167,7 +152,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     console.log("📜 Najden SRT:", srtFile);
     res.json({ subtitles });
   } catch (err) {
-    console.error("❌ Napaka:", err.message);
+    console.error("❌ Napaka pri razpakiranju:", err.message);
     res.json({ subtitles: [] });
   }
 });
@@ -183,7 +168,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET Addon aktiven!");
+  console.log("✅ Formio Podnapisi.NET Addon aktiven! (Samo 🇸🇮)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
