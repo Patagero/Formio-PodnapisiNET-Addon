@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "3.0.0",
+  version: "3.1.0",
   name: "Formio Podnapisi.NET 🇸🇮",
   description: "Prijavljen dostop do slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -32,6 +32,7 @@ const PASSWORD = "Formio1978";
 // 🔒 prijava in shranjevanje piškotkov
 async function ensureLoggedIn(page) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
+
   if (fs.existsSync(cookiesPath)) {
     const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
     await page.setCookie(...cookies);
@@ -40,11 +41,25 @@ async function ensureLoggedIn(page) {
   }
 
   console.log("🔐 Prijavljam se v podnapisi.net ...");
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-  await page.type("input[name='username']", USERNAME);
-  await page.type("input[name='password']", PASSWORD);
-  await page.click("button[type='submit']");
+  await page.goto(LOGIN_URL, { waitUntil: "networkidle2" });
+
+  // počakaj, da se naloži obrazec
+  await page.waitForSelector("form[action*='login']", { timeout: 20000 });
+
+  await page.type("input[name='username']", USERNAME, { delay: 50 });
+  await page.type("input[name='password']", PASSWORD, { delay: 50 });
+
+  // Klik na gumb z razredom ali tekstom
+  const loginButton = await page.$("form[action*='login'] button, form[action*='login'] input[type='submit']");
+  if (!loginButton) throw new Error("⚠️ Gumb za prijavo ni bil najden.");
+  await loginButton.click();
+
+  // Počakaj na znak, da si prijavljen (prikaže se "Odjava" ali uporabniško ime)
   await page.waitForNavigation({ waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => document.body.innerText.includes("Odjava") || document.body.innerText.includes("patagero"),
+    { timeout: 15000 }
+  );
 
   const cookies = await page.cookies();
   fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
