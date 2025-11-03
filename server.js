@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "4.1.0",
+  version: "4.2.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Hiter iskalnik slovenskih podnapisov s podnapisi.net (avtomatska prijava + cache)",
+  description: "Samodejno išče slovenske podnapise s podnapisi.net (login pred iskanjem + cache)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -30,60 +30,54 @@ const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
 // 🔐 Prijava v podnapisi.net
-async function ensureLoggedIn(page, force = false) {
+async function performLogin(browser) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
-  if (!force && fs.existsSync(cookiesPath)) {
-    const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
-    await page.setCookie(...cookies);
-    console.log("🍪 Piškotki naloženi (preskočena prijava)");
-    return;
+
+  // Če obstajajo piškotki, jih uporabimo
+  if (fs.existsSync(cookiesPath)) {
+    console.log("🍪 Piškotki obstajajo, preskočim prijavo.");
+    return JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
   }
 
   console.log("🔐 Prijavljam se v podnapisi.net ...");
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+  const page = await browser.newPage();
+  await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
 
   try {
-    await page.waitForSelector("input[name='username'], #username", { timeout: 15000 });
+    await page.waitForSelector("form[action*='login']", { timeout: 15000 });
     await page.type("input[name='username'], #username", USERNAME, { delay: 30 });
     await page.type("input[name='password'], #password", PASSWORD, { delay: 30 });
 
+    // klik na prijavni gumb
     const loginButton =
       (await page.$("button[type='submit']")) ||
       (await page.$("input[type='submit']")) ||
       (await page.$("button.btn")) ||
-      (await page.$("form button")) ||
-      (await page.$("form input[type='button']"));
+      (await page.$("form button"));
 
     if (loginButton) {
       await loginButton.click();
       console.log("➡️ Klik na gumb za prijavo");
-    } else {
-      console.log("⚠️ Gumb ni bil najden, pošiljam ročni POST ...");
-      await page.evaluate(
-        async (user, pass) => {
-          const fd = new FormData();
-          fd.append("username", user);
-          fd.append("password", pass);
-          await fetch("/sl/login", { method: "POST", body: fd, credentials: "include" });
-        },
-        USERNAME,
-        PASSWORD
-      );
     }
 
+    // čakamo na znak, da je uporabnik prijavljen
     await page.waitForFunction(
       () =>
         document.body.innerText.includes("Odjava") ||
         document.body.innerText.includes("Moj profil") ||
         document.body.innerText.includes("patagero"),
-      { timeout: 40000 }
+      { timeout: 60000 }
     );
 
     console.log("✅ Prijava uspešna");
     const cookies = await page.cookies();
     fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
+    await page.close();
+    return cookies;
   } catch (e) {
     console.log("⚠️ Napaka pri prijavi:", e.message);
+    await page.close();
+    return [];
   }
 }
 
@@ -112,39 +106,34 @@ async function getBrowser() {
   });
 }
 
-// 🧠 Glavna funkcija za iskanje
+// 🧠 Iskanje podnapisov
 async function scrapeAndSave(imdbId) {
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
-
   const browser = await getBrowser();
-  const page = await browser.newPage();
 
-  // 🔐 najprej login
-  await ensureLoggedIn(page);
+  // 🔐 1️⃣ najprej login
+  const cookies = await performLogin(browser);
+
+  // 🔎 2️⃣ nato odpremo iskanje
+  const page = await browser.newPage();
+  if (cookies?.length) await page.setCookie(...cookies);
 
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 25000 });
 
-  // 🧩 preveri, ali je uporabnik prijavljen
-  const pageContent = await page.content();
-  if (pageContent.includes("Aggregated filters are not available")) {
-    console.log("⚠️ Uporabnik ni prijavljen (filters error) — ponovni login ...");
-    await ensureLoggedIn(page, true);
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 25000 });
-  }
+  await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
   let subtitles = [];
-
   try {
-    await page.waitForSelector("table.table tbody tr, .results, a[href*='/download']", { timeout: 15000 });
+    await page.waitForSelector("table.table tbody tr, a[href*='/download']", { timeout: 15000 });
+
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows
         .map((r) => {
-          const link = r.querySelector("a[href*='/download']")?.href || null;
-          const title = r.querySelector("a[href*='/download']")?.innerText?.trim() || "Neznan";
-          return link ? { link, title } : null;
+          const link = r.querySelector("a[href*='/download']")?.href;
+          const title = r.querySelector("a[href*='/download']")?.innerText?.trim();
+          return link && title ? { link, title } : null;
         })
         .filter(Boolean)
     );
@@ -189,7 +178,7 @@ async function scrapeAndSave(imdbId) {
   return { subtitles };
 }
 
-// 📂 Strežnik za SRT datoteke
+// 📂 Strežnik za datoteke
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
