@@ -13,13 +13,13 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "2.4.0",
+  version: "2.5.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Pridobi vse slovenske podnapise s podnapisi.net (zanesljivo čakanje na AJAX)",
+  description: "Iskanje in prenos slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
-  idPrefixes: ["tt"]
+  idPrefixes: ["tt"],
 };
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
@@ -68,17 +68,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
 
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
   try {
     console.log("⌛ Čakam, da se naložijo rezultati (AJAX) ...");
-    // najprej čakaj na glavno tabelo
-    await page.waitForSelector("table.table", { timeout: 15000 });
-
-    // potem čakaj, da ima tabela vsaj nekaj vrstic (rezultate)
+    await page.waitForSelector("table.table", { timeout: 20000 });
     await page.waitForFunction(
-      () => document.querySelectorAll("table.table tr a[href*='/download']").length > 2,
-      { timeout: 15000 }
+      () => document.querySelectorAll("a[href*='/download']").length > 0,
+      { timeout: 20000 }
     );
   } catch (err) {
     console.log("⚠️ Rezultati se niso pojavili pravočasno:", err.message);
@@ -89,6 +86,11 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   fs.writeFileSync(dumpFile, html);
   console.log(`📄 HTML dump shranjen v ${dumpFile}`);
 
+  // Izpiši prvih 1000 znakov HTML-ja za diagnostiko
+  console.log("🔍 HTML (prvih 1000 znakov):");
+  console.log(html.substring(0, 1000));
+
+  // Poiščemo vse slovenske povezave za prenos
   const matches = [...html.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)];
   await browser.close();
 
@@ -114,13 +116,15 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(extractDir, true);
 
-      const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
+      const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
       if (srtFile) {
         subtitles.push({
           id: `formio-podnapisi-${index}`,
-          url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${index}/${encodeURIComponent(srtFile)}`,
+          url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${index}/${encodeURIComponent(
+            srtFile
+          )}`,
           lang: "sl",
-          name: `Formio Podnapisi.NET 🇸🇮 #${index}`
+          name: `Formio Podnapisi.NET 🇸🇮 #${index}`,
         });
         console.log(`📜 Najden SRT [#${index}]: ${srtFile}`);
         index++;
@@ -132,6 +136,13 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   CACHE.set(imdbId, subtitles);
   res.json({ subtitles });
+});
+
+// 🔍 Dodatna pot za ogled dump HTML datotek
+app.get("/dump/:id", (req, res) => {
+  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
+  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
+  else res.status(404).send("Dump file not found");
 });
 
 app.get("/files/:id/:file", (req, res) => {
@@ -146,7 +157,7 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
   console.log("✅ Formio Podnapisi.NET Addon 🇸🇮 aktiven!");
-  console.log("🌍 Počaka na AJAX in shrani HTML dump (razhroščevalno).");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
+  console.log("🔗 Ogled dump: /dump/<imdbId>");
   console.log("==================================================");
 });
