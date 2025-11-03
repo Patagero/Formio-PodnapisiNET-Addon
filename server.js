@@ -14,7 +14,7 @@ app.use(express.json());
 // 📦 Manifest
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "6.3.0",
+  version: "6.3.1",
   name: "Formio Podnapisi.NET 🇸🇮+🇬🇧",
   description: "Hitro iskanje slovenskih in angleških podnapisov s prijavo in cache sistemom",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -44,7 +44,7 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 }
 
-// 🔐 Globalna seja Puppeteer (ostane odprta za več zahtev)
+// 🔐 Globalna seja Puppeteer
 let globalBrowser = null;
 let globalCookiesLoaded = false;
 
@@ -63,7 +63,6 @@ async function getBrowser() {
 async function ensureLoggedIn(page) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
 
-  // ✅ Če obstajajo piškotki — uporabi
   if (fs.existsSync(cookiesPath) && globalCookiesLoaded) {
     const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
     await page.setCookie(...cookies);
@@ -73,7 +72,7 @@ async function ensureLoggedIn(page) {
 
   console.log("🔐 Prijavljam se v podnapisi.net ...");
   await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
-  await page.waitForTimeout(4000);
+  await new Promise(r => setTimeout(r, 4000)); // ⏳ nadomestek za waitForTimeout
 
   const bodyText = await page.evaluate(() => document.body.innerText);
   if (bodyText.includes("Odjava") || bodyText.includes("Moj profil")) {
@@ -135,7 +134,7 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
   console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
 
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
-  await page.waitForTimeout(2500);
+  await new Promise(r => setTimeout(r, 2500));
 
   const html = await page.content();
   let results = [];
@@ -246,7 +245,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮+🇬🇧 aktiven (login cache + paralelno iskanje)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮+🇬🇧 aktiven (login cache + paralelno iskanje + stabilno čakanje)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
