@@ -11,10 +11,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 📜 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.5.0",
+  version: "1.6.0",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih in angleških podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -23,9 +22,16 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// 📂 Začasna mapa
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
+// 🔄 Preprost cache (RAM)
+const CACHE = new Map();
+const cacheGet = key => CACHE.get(key);
+const cacheSet = (key, val) => {
+  CACHE.set(key, { val, time: Date.now() });
+  if (CACHE.size > 10) CACHE.delete([...CACHE.keys()][0]);
+};
 
 // 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
@@ -38,13 +44,12 @@ async function getTitleFromIMDb(imdbId) {
       console.log(`🎬 IMDb → naslov: ${data.Title}`);
       return data.Title;
     }
-  } catch (err) {
-    console.log("⚠️ IMDb API napaka:", err.message);
+  } catch {
+    return imdbId;
   }
   return imdbId;
 }
 
-// 🧩 Pridobi Puppeteer browser
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -55,11 +60,16 @@ async function getBrowser() {
   });
 }
 
-// 🔍 Iskanje podnapisov
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
+
+  const cached = cacheGet(imdbId);
+  if (cached) {
+    console.log("⚡ Iz cache-a:", imdbId);
+    return res.json({ subtitles: cached.val });
+  }
 
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
@@ -68,29 +78,31 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const browser = await getBrowser();
     const page = await browser.newPage();
 
-    // 🧠 Piškotki za globalni filter (GLF)
-    await page.setCookie(
-      { name: "glf", value: language, domain: ".podnapisi.net", path: "/" },
-      { name: "global_language_filter", value: language, domain: ".podnapisi.net", path: "/" },
-      { name: "filter_language", value: language, domain: ".podnapisi.net", path: "/" }
-    );
-
     await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     );
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=${language}`;
+    const searchUrl = `https://www.podnapisi.net/en/subtitles/search/?keywords=${query}`;
     console.log(`🌍 Iščem (${language}): ${searchUrl}`);
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await new Promise(r => setTimeout(r, 15000)); // čakaj 15s da se naloži vse
+    // Če iščemo slovenske, klikni filter v levem meniju
+    if (language === "sl") {
+      try {
+        await page.waitForSelector("label[for*='sl']", { timeout: 5000 });
+        await page.click("label[for*='sl']");
+        await page.waitForTimeout(3000);
+        console.log("🇸🇮 Filter 'Slovenščina' aktiviran");
+      } catch {
+        console.log("⚠️ Ni bilo mogoče klikniti 'Slovenščina'");
+      }
+    }
 
     let downloadLink = null;
     const selectors = [
       "a[href*='/download']",
-      ".downloads a",
       "table a[href*='/download']",
-      "a.btn[href*='/download']"
+      ".downloads a"
     ];
 
     for (const sel of selectors) {
@@ -98,20 +110,18 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
         const found = await page.$eval(sel, el => el.href);
         if (found) {
           downloadLink = found;
-          console.log(`✅ Najden prenos (${sel}): ${found}`);
+          console.log(`✅ Najden prenos (${language}): ${found}`);
           break;
         }
       } catch {}
     }
 
-    // Regex fallback
     if (!downloadLink) {
-      console.log("⚠️ Selector ni našel povezave, preklapljam na regex iskanje...");
+      console.log("⚠️ Regex fallback ...");
       const html = await page.content();
-      const match = html.match(/\/[a-z]{2}\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g);
-      if (match && match.length > 0) {
+      const match = html.match(/\/[a-z]{2}\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/);
+      if (match) {
         downloadLink = "https://www.podnapisi.net" + match[0];
-        console.log("✅ Najden prenos (regex):", downloadLink);
       }
     }
 
@@ -126,18 +136,17 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 
   if (!downloadLink) {
-    console.log("❌ Ni bilo mogoče najti nobene povezave za prenos.");
+    console.log("❌ Ni bilo mogoče najti povezave za prenos.");
     return res.json({ subtitles: [] });
   }
 
+  // 📦 Prenesi ZIP in razpakiraj
   try {
-    // 📦 Prenesi ZIP
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
     const buf = Buffer.from(await zipRes.arrayBuffer());
     fs.writeFileSync(zipPath, buf);
 
-    // 📂 Razpakiraj ZIP
     const extractDir = path.join(TMP_DIR, imdbId);
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
@@ -148,9 +157,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       return res.json({ subtitles: [] });
     }
 
-    console.log("📜 Najden SRT:", srtFile);
-
-    const stream = [
+    const result = [
       {
         id: "formio-podnapisi",
         url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(srtFile)}`,
@@ -159,21 +166,21 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       }
     ];
 
-    res.json({ subtitles: stream });
+    cacheSet(imdbId, result);
+    console.log("📜 Najden SRT:", srtFile);
+    res.json({ subtitles: result });
   } catch (err) {
     console.error("❌ Napaka:", err.message);
     res.json({ subtitles: [] });
   }
 });
 
-// 📂 Datoteke
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
   else res.status(404).send("Subtitle not found");
 });
 
-// Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
 const PORT = process.env.PORT || 10000;
