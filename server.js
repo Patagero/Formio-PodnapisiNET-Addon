@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "2.2.0",
+  version: "2.3.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Prikaz vseh slovenskih podnapisov iz podnapisi.net",
+  description: "Prikaz vseh slovenskih podnapisov s podnapisi.net (asinkroni način)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -26,8 +26,6 @@ const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const CACHE = new Map();
-const cacheGet = k => CACHE.get(k);
-const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 40) CACHE.delete([...CACHE.keys()][0]); };
 
 async function getTitleFromIMDb(imdbId) {
   try {
@@ -38,7 +36,7 @@ async function getTitleFromIMDb(imdbId) {
       return data.Title;
     }
   } catch (err) {
-    console.log("⚠️ Napaka pri IMDb API:", err.message);
+    console.log("⚠️ Napaka IMDb API:", err.message);
   }
   return imdbId;
 }
@@ -58,40 +56,48 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
-  const cached = cacheGet(imdbId);
-  if (cached) {
+  if (CACHE.has(imdbId)) {
     console.log("⚡ Iz cache-a:", imdbId);
-    return res.json({ subtitles: cached });
+    return res.json({ subtitles: CACHE.get(imdbId) });
   }
 
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
   const browser = await getBrowser();
   const page = await browser.newPage();
-
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
+
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
   try {
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 10000 });
-    await page.waitForSelector("a[href*='/download']", { timeout: 7000 });
-  } catch (err) {
-    console.log("⚠️ Timeout ali ni zadetkov.");
+    // počakaj do 10 sekund, da AJAX naloži podnapise
+    await page.waitForSelector("table tr a[href*='/download']", { timeout: 10000 });
+  } catch {
+    console.log("⚠️ Ni še nalaganja rezultatov — čakamo dodatno 10 sekund ...");
+    try {
+      await page.waitForFunction(
+        () => document.querySelectorAll("a[href*='/download']").length > 0,
+        { timeout: 10000 }
+      );
+    } catch {
+      console.log("❌ Ni bilo mogoče najti podnapisov po 20 sekundah.");
+    }
   }
 
   const html = await page.content();
   const matches = [...html.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)];
+  await browser.close();
 
   if (!matches.length) {
     console.log("❌ Ni bilo mogoče najti slovenskih podnapisov.");
-    await browser.close();
     return res.json({ subtitles: [] });
   }
 
   console.log(`✅ Najdenih ${matches.length} slovenskih podnapisov.`);
-
   const subtitles = [];
   let index = 1;
+
   for (const match of matches) {
     const downloadLink = "https://www.podnapisi.net" + match[0];
     const zipPath = path.join(TMP_DIR, `${imdbId}_${index}.zip`);
@@ -121,9 +127,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     }
   }
 
-  await browser.close();
-
-  cacheSet(imdbId, subtitles);
+  CACHE.set(imdbId, subtitles);
   res.json({ subtitles });
 });
 
@@ -139,7 +143,7 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
   console.log("✅ Formio Podnapisi.NET Addon 🇸🇮 aktiven!");
-  console.log("🌍 Išče in prikaže VSE slovenske podnapise za film.");
+  console.log("🌍 Prikaže VSE slovenske podnapise (počaka na AJAX).");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
