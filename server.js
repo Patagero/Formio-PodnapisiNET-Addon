@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "3.2.0",
+  version: "3.3.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise s prijavo v podnapisi.net",
+  description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -23,13 +23,49 @@ const manifest = {
 };
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
+const CACHE_DIR = path.join(TMP_DIR, "cache");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// 🔒 prijava v podnapisi.net
+// 🧹 Počisti datoteke starejše od 2 dni
+function cleanupOldFiles() {
+  const cutoff = Date.now() - 2 * 24 * 60 * 60 * 1000; // 2 dni
+  const walk = (dir) => {
+    for (const file of fs.readdirSync(dir)) {
+      const full = path.join(dir, file);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) walk(full);
+      else if (stat.mtimeMs < cutoff) {
+        fs.unlinkSync(full);
+        console.log("🧹 Izbrisano:", full);
+      }
+    }
+  };
+  walk(TMP_DIR);
+}
+cleanupOldFiles();
+
+// ⚡ Preveri cache (24 ur)
+function getCache(imdbId) {
+  const file = path.join(CACHE_DIR, imdbId + ".json");
+  if (fs.existsSync(file)) {
+    const age = Date.now() - fs.statSync(file).mtimeMs;
+    if (age < 24 * 60 * 60 * 1000) {
+      console.log("⚡ Cache zadetek za:", imdbId);
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    }
+  }
+  return null;
+}
+function saveCache(imdbId, data) {
+  fs.writeFileSync(path.join(CACHE_DIR, imdbId + ".json"), JSON.stringify(data, null, 2));
+}
+
+// 🔐 Prijava
 async function ensureLoggedIn(page) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
 
@@ -50,22 +86,20 @@ async function ensureLoggedIn(page) {
   const loginButton =
     (await page.$("form[action*='login'] button")) ||
     (await page.$("form[action*='login'] input[type='submit']"));
-
   if (!loginButton) throw new Error("⚠️ Gumb za prijavo ni bil najden.");
   await loginButton.click();
 
-  console.log("⌛ Čakam, da se potrdi prijava ...");
   try {
     await page.waitForFunction(
-      () => {
-        const text = document.body.innerText;
-        return text.includes("Odjava") || text.includes("Moj profil") || text.includes("patagero");
-      },
-      { timeout: 30000, polling: 500 }
+      () =>
+        document.body.innerText.includes("Odjava") ||
+        document.body.innerText.includes("Moj profil") ||
+        document.body.innerText.includes("patagero"),
+      { timeout: 20000 }
     );
-    console.log("✅ Prijava uspešna (prepoznan uporabnik).");
+    console.log("✅ Prijava uspešna.");
   } catch {
-    console.log("⚠️ Ni bilo mogoče potrditi prijave — morda captcha ali počasno nalaganje.");
+    console.log("⚠️ Ni bilo mogoče potrditi prijave (captcha ali zamik).");
   }
 
   const cookies = await page.cookies();
@@ -73,7 +107,7 @@ async function ensureLoggedIn(page) {
   console.log("💾 Piškotki shranjeni za prihodnjo uporabo.");
 }
 
-// 🔎 IMDb → naslov
+// 🔍 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -88,7 +122,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔧 zagon Chromium
+// 🧩 Zaženi Chromium
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -98,11 +132,15 @@ async function getBrowser() {
   });
 }
 
-// 🧩 Glavna pot za podnapise
+// 🎬 Glavni route
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
+
+  // ⚡ preveri cache
+  const cached = getCache(imdbId);
+  if (cached) return res.json(cached);
 
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
@@ -115,14 +153,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
 
   try {
-    // počakaj na rezultate
     await page.waitForSelector("table.table tbody tr", { timeout: 20000 });
 
-    const html = await page.content();
-    const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
-    fs.writeFileSync(dumpFile, html);
-
-    // 🔍 poberi VSE povezave do podnapisov
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows.map((row) => {
         const link = row.querySelector("a[href*='/download']")?.href || null;
@@ -173,7 +205,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     }
 
     await browser.close();
-    res.json({ subtitles });
+
+    const data = { subtitles };
+    saveCache(imdbId, data); // ⚡ shrani cache
+    res.json(data);
   } catch (err) {
     console.log("❌ Napaka pri iskanju podnapisov:", err.message);
     await browser.close();
@@ -188,17 +223,10 @@ app.get("/files/:id/:file", (req, res) => {
   else res.status(404).send("Subtitle not found");
 });
 
-// 📄 HTML dump za debug
-app.get("/dump/:id", (req, res) => {
-  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
-  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
-  else res.status(404).send("Dump not found");
-});
-
 // 📜 Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// 🚀 Zagon strežnika
+// 🚀 Zagon
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
