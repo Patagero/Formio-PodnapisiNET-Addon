@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.7.0",
+  version: "1.8.0",
   name: "Formio Podnapisi.NET",
-  description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net (hitro in stabilno)",
+  description: "Samodejno iskanje slovenskih in angleških podnapisov s podnapisi.net (optimizirano in hitro)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -28,7 +28,7 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 // 🧠 Preprost cache
 const CACHE = new Map();
 const cacheGet = k => CACHE.get(k);
-const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 20) CACHE.delete([...CACHE.keys()][0]); };
+const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 30) CACHE.delete([...CACHE.keys()][0]); };
 
 // 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
@@ -79,14 +79,18 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}`;
     console.log(`🌍 Iščem (${language}): ${searchUrl}`);
 
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    try {
+      await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
+    } catch {
+      console.log("⚠️ Timeout pri nalaganju strani");
+    }
 
-    // Klikni filter Slovenščina, če obstaja
+    // Klikni "Slovenščina", če obstaja
     if (language === "sl") {
       try {
-        await page.waitForSelector("label[for*='sl']", { timeout: 4000 });
-        await page.click("label[for*='sl']");
-        await page.waitForTimeout(2500);
+        await page.waitForSelector("input[id*='sl'] + label, label[for*='sl']", { timeout: 2000 });
+        await page.click("input[id*='sl'] + label, label[for*='sl']");
+        await page.waitForTimeout(1200);
         console.log("🇸🇮 Filter 'Slovenščina' aktiviran");
       } catch {
         console.log("⚠️ Ni bilo mogoče klikniti 'Slovenščina'");
@@ -115,9 +119,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       console.log("⚠️ Regex fallback ...");
       const html = await page.content();
       const match = html.match(/\/[a-z]{2}\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/);
-      if (match) {
-        downloadLink = "https://www.podnapisi.net" + match[0];
-      }
+      if (match) downloadLink = "https://www.podnapisi.net" + match[0];
     }
 
     await browser.close();
