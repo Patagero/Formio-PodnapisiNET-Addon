@@ -13,100 +13,67 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "4.3.0",
+  version: "3.3.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise s podnapisi.net (login pred iskanjem + stabilno prijavljanje)",
+  description: "Iskanje slovenskih podnapisov s prijavo preko uporabniških podatkov iz Stremio nastavitev",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
-  idPrefixes: ["tt"]
+  idPrefixes: ["tt"],
 };
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
-const USERNAME = "patagero";
-const PASSWORD = "Formio1978";
 
-// 🔐 Prijava v podnapisi.net (stabilna + fallback)
-async function performLogin(browser) {
+// 🔒 prijava v podnapisi.net (dinamična iz nastavitev)
+async function ensureLoggedIn(page, username, password) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
 
-  // Če obstajajo piškotki, preskočimo prijavo
   if (fs.existsSync(cookiesPath)) {
-    console.log("🍪 Piškotki obstajajo, preskočim prijavo.");
-    return JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
+    const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
+    await page.setCookie(...cookies);
+    console.log("🍪 Uporabljeni shranjeni piškotki (login preskočen).");
+    return;
   }
 
-  console.log("🔐 Prijavljam se v podnapisi.net ...");
-  const page = await browser.newPage();
+  if (!username || !password) {
+    console.log("⚠️ Uporabniško ime ali geslo ni podano — prijava preskočena.");
+    return;
+  }
+
+  console.log(`🔐 Prijavljam se kot '${username}' ...`);
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   try {
-    // počakamo, da se login form naloži
-    await page.waitForSelector("form[action*='login']", { timeout: 20000 });
-    await page.type("input[name='username'], #username", USERNAME, { delay: 25 });
-    await page.type("input[name='password'], #password", PASSWORD, { delay: 25 });
+    await page.waitForSelector("form[action*='login'] input[name='username']", { timeout: 20000 });
+    await page.type("input[name='username']", username, { delay: 25 });
+    await page.type("input[name='password']", password, { delay: 25 });
 
-    // poskusi klikniti več različnih gumbov
-    const selectors = [
-      "button[type='submit']",
-      "input[type='submit']",
-      "button.btn-primary",
-      "form button",
-      ".btn.btn-success",
-      "button.login",
-    ];
+    const loginButton =
+      (await page.$("form[action*='login'] button")) ||
+      (await page.$("form[action*='login'] input[type='submit']"));
+    if (loginButton) await loginButton.click();
 
-    let clicked = false;
-    for (const sel of selectors) {
-      const btn = await page.$(sel);
-      if (btn) {
-        await btn.click();
-        console.log(`➡️ Klik na gumb ${sel}`);
-        clicked = true;
-        break;
-      }
-    }
-
-    // če gumb ne obstaja → pošlji ročni POST
-    if (!clicked) {
-      console.log("⚠️ Gumb za prijavo ni najden — pošiljam ročni POST ...");
-      await page.evaluate(
-        async (user, pass) => {
-          const form = new FormData();
-          form.append("username", user);
-          form.append("password", pass);
-          await fetch("/sl/login", { method: "POST", body: form, credentials: "include" });
-        },
-        USERNAME,
-        PASSWORD
-      );
-    }
-
-    // čakamo na znak prijave
+    console.log("⌛ Čakam, da se potrdi prijava ...");
     await page.waitForFunction(
-      () =>
-        document.body.innerText.includes("Odjava") ||
-        document.body.innerText.includes("Moj profil") ||
-        document.body.innerText.includes("patagero"),
+      () => {
+        const text = document.body.innerText;
+        return text.includes("Odjava") || text.includes("Moj profil") || text.includes(username);
+      },
       { timeout: 30000 }
     );
 
-    console.log("✅ Prijava uspešna");
+    console.log("✅ Prijava uspešna (prepoznan uporabnik).");
     const cookies = await page.cookies();
     fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
-    await page.close();
-    return cookies;
   } catch (err) {
     console.log("⚠️ Napaka pri prijavi:", err.message);
-    await page.close();
-    return [];
   }
 }
 
-// 🎬 IMDb → naslov
+// 🔎 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -121,57 +88,71 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🧩 Chromium
+// 🔧 zagon Chromium
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
     args: [...chromium.args, "--no-sandbox"],
     executablePath,
-    headless: chromium.headless
+    headless: chromium.headless,
   });
 }
 
-// 🧠 Glavna funkcija za iskanje
-async function scrapeAndSave(imdbId) {
+// 🧩 Glavna pot za podnapise
+app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
+  const imdbId = req.params.id;
+  const username = req.query.username;
+  const password = req.query.password;
+
+  console.log("==================================================");
+  console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
+  if (username) console.log(`👤 Uporabnik: ${username}`);
+  else console.log("⚠️ Brez uporabniškega imena — delujem brez prijave");
+
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
   const browser = await getBrowser();
-
-  // 1️⃣ Najprej login
-  const cookies = await performLogin(browser);
-
-  // 2️⃣ Nato iskanje
   const page = await browser.newPage();
-  if (cookies?.length) await page.setCookie(...cookies);
+  await ensureLoggedIn(page, username, password);
 
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
 
-  await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
-
-  let subtitles = [];
   try {
-    await page.waitForSelector("table.table tbody tr, a[href*='/download']", { timeout: 15000 });
+    await page.waitForSelector("table.table tbody tr", { timeout: 20000 });
+
+    const html = await page.content();
+    const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
+    fs.writeFileSync(dumpFile, html);
 
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows
-        .map((r) => {
-          const link = r.querySelector("a[href*='/download']")?.href;
-          const title = r.querySelector("a[href*='/download']")?.innerText?.trim();
-          return link && title ? { link, title } : null;
+        .map((row) => {
+          const link = row.querySelector("a[href*='/download']")?.href || null;
+          const title = row.querySelector("a[href*='/download']")?.innerText?.trim() || "Neznan";
+          return link ? { link, title } : null;
         })
         .filter(Boolean)
     );
 
+    if (!results.length) {
+      console.log("❌ Ni bilo najdenih slovenskih podnapisov.");
+      await browser.close();
+      return res.json({ subtitles: [] });
+    }
+
     console.log(`✅ Najdenih ${results.length} slovenskih podnapisov.`);
+    const subtitles = [];
     let index = 1;
 
     for (const r of results) {
+      const downloadLink = r.link;
       const zipPath = path.join(TMP_DIR, `${imdbId}_${index}.zip`);
       const extractDir = path.join(TMP_DIR, `${imdbId}_${index}`);
 
       try {
-        const zipRes = await fetch(r.link);
+        const zipRes = await fetch(downloadLink);
         const buf = Buffer.from(await zipRes.arrayBuffer());
         fs.writeFileSync(zipPath, buf);
 
@@ -186,7 +167,7 @@ async function scrapeAndSave(imdbId) {
               srtFile
             )}`,
             lang: "sl",
-            name: `Formio 🇸🇮 - ${r.title}`
+            name: `🇸🇮 ${r.title}`,
           });
           console.log(`📜 Najden SRT [#${index}]: ${srtFile}`);
           index++;
@@ -195,13 +176,15 @@ async function scrapeAndSave(imdbId) {
         console.log(`⚠️ Napaka pri prenosu #${index}:`, err.message);
       }
     }
-  } catch (e) {
-    console.log("⚠️ Napaka Puppeteer:", e.message);
-  }
 
-  await browser.close();
-  return { subtitles };
-}
+    await browser.close();
+    res.json({ subtitles });
+  } catch (err) {
+    console.log("❌ Napaka pri iskanju podnapisov:", err.message);
+    await browser.close();
+    res.json({ subtitles: [] });
+  }
+});
 
 // 📂 Strežnik za datoteke
 app.get("/files/:id/:file", (req, res) => {
@@ -210,19 +193,17 @@ app.get("/files/:id/:file", (req, res) => {
   else res.status(404).send("Subtitle not found");
 });
 
+// 📄 HTML dump za debug
+app.get("/dump/:id", (req, res) => {
+  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
+  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
+  else res.status(404).send("Dump not found");
+});
+
 // 📜 Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// 🎬 Route za podnapise
-app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
-  console.log("==================================================");
-  console.log("🎬 Prejemam zahtevo za IMDb:", req.params.id);
-
-  const data = await scrapeAndSave(req.params.id);
-  res.json(data);
-});
-
-// 🔥 Zagon
+// 🚀 Zagon strežnika
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
