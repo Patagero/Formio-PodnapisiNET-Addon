@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.3.0",
+  version: "1.3.5",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -25,7 +25,7 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// 🎬 IMDb ID → Naslov filma prek OMDb API
+// 🎬 IMDb → naslov filma
 async function getTitleFromIMDb(imdbId) {
   const apiKey = "thewdb";
   const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
@@ -42,7 +42,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🧩 Puppeteer z Chromium (Render friendly)
+// 🔧 Puppeteer browser
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -53,7 +53,7 @@ async function getBrowser() {
   });
 }
 
-// 🔍 Glavna pot za pridobivanje podnapisov
+// 🔍 Glavna pot
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
@@ -69,26 +69,33 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
-    await page.goto(searchUrl, { waitUntil: "networkidle0", timeout: 90000 });
+    // Počakaj, da stran v celoti naloži JS rezultate
+    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 120000 });
+    await page.waitForTimeout(10000);
 
-    // počakaj, da se prikažejo rezultati
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          "a[href*='/download'], table tr a[href*='/download'], .downloads a[href*='/download']"
-        ).length > 0,
-      { timeout: 25000 }
-    );
+    let downloadLink;
+    try {
+      await page.waitForSelector("a[href*='/download']", { timeout: 60000 });
+      downloadLink = await page.$eval("a[href*='/download']", el => el.href);
+      console.log("✅ Najden prenos (selector):", downloadLink);
+    } catch {
+      console.log("⚠️ Selector ni našel povezave, preklapljam na regex iskanje...");
+      const html = await page.content();
+      const match = html.match(/\/[a-z]{2}\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g);
+      if (match && match.length > 0) {
+        downloadLink = "https://www.podnapisi.net" + match[0];
+        console.log("✅ Najden prenos (regex):", downloadLink);
+      }
+    }
 
-    const downloadLink = await page.$eval(
-      "a[href*='/download'], table tr a[href*='/download'], .downloads a[href*='/download']",
-      el => el.href
-    );
-
-    console.log("✅ Najden prenos:", downloadLink);
     await browser.close();
 
-    // 📦 Prenesi ZIP podnapisov
+    if (!downloadLink) {
+      console.log("❌ Ni bilo mogoče najti nobene povezave za prenos.");
+      return res.json({ subtitles: [] });
+    }
+
+    // 📦 Prenesi ZIP
     const zipPath = path.join(TMP_DIR, `${imdbId}.zip`);
     const zipRes = await fetch(downloadLink);
     const buf = Buffer.from(await zipRes.arrayBuffer());
@@ -121,18 +128,16 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     res.json({ subtitles: stream });
   } catch (err) {
     console.error("❌ Napaka:", err.message);
-
-    // če Puppeteer ne najde ničesar, shrani HTML za pregled
     const htmlDump = path.join(TMP_DIR, `${imdbId}.html`);
     try {
-      fs.writeFileSync(htmlDump, `<p>Napaka: ${err.message}</p>`);
+      fs.writeFileSync(htmlDump, `<p>${err.message}</p>`);
       console.log(`📄 HTML dump shranjen v ${htmlDump}`);
     } catch {}
     res.json({ subtitles: [] });
   }
 });
 
-// 📂 Stremio zahteva SRT datoteko
+// 📂 Stremio dostop do .srt
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
@@ -142,6 +147,7 @@ app.get("/files/:id/:file", (req, res) => {
   }
 });
 
+// Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
 const PORT = process.env.PORT || 10000;
