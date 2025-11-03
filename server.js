@@ -16,9 +16,9 @@ app.use(express.json());
 // ========================
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "5.1.0",
+  version: "5.2.0",
   name: "Formio Podnapisi.NET 🌍",
-  description: "Hiter iskalnik vseh podnapisov (vsi jeziki, brez prijave, z zastavicami)",
+  description: "Išče vse jezike (brez prijave) – s pravilnimi jezikovnimi kodami in zastavicami",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -41,8 +41,31 @@ function saveCache(cache) {
 }
 
 // ========================
-// 🏳️ Pretvorba jezika → zastavica
+// 🏳️ Pretvorba jezika → ISO koda + zastavica
 // ========================
+function normalizeLang(name) {
+  if (!name) return "xx";
+  const langName = name.toLowerCase();
+  const map = {
+    slovenian: "sl", slovenski: "sl", slovenščina: "sl",
+    english: "en", angleški: "en",
+    croatian: "hr", hrvatski: "hr",
+    serbian: "sr", srpski: "sr",
+    italian: "it", italijanski: "it",
+    german: "de", nemški: "de",
+    french: "fr", francoski: "fr",
+    spanish: "es", španski: "es",
+    russian: "ru", ruski: "ru",
+    macedonian: "mk", makedonski: "mk",
+    hungarian: "hu", madžarski: "hu",
+    bosnian: "bs", bosanski: "bs",
+    polish: "pl", poljski: "pl",
+    czech: "cs", češki: "cs",
+    slovak: "sk", slovaški: "sk"
+  };
+  return map[langName] || "xx";
+}
+
 function flagForLang(lang) {
   const map = {
     sl: "🇸🇮", en: "🇬🇧", hr: "🇭🇷", sr: "🇷🇸", it: "🇮🇹",
@@ -82,7 +105,7 @@ async function getBrowser() {
 }
 
 // ========================
-// 🎞️ Glavna pot za podnapise (vsi jeziki)
+// 🎞️ Glavna pot za podnapise (vsi jeziki, brez prijave)
 // ========================
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
@@ -112,8 +135,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       rows.map((row) => {
         const link = row.querySelector("a[href*='/download']")?.href || null;
         const title = row.querySelector("a[href*='/download']")?.innerText?.trim() || "Neznan";
-        const lang = row.querySelector("td img")?.alt?.toLowerCase() || "unknown";
-        return link ? { link, title, lang } : null;
+        const langAlt = row.querySelector("td img")?.alt || "unknown";
+        return link ? { link, title, langAlt } : null;
       }).filter(Boolean)
     );
 
@@ -127,7 +150,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const subtitles = [];
     let index = 1;
 
-    for (const r of results.slice(0, 30)) { // do 30 zadetkov
+    for (const r of results.slice(0, 30)) { // omejimo na 30 zadetkov
+      const langCode = normalizeLang(r.langAlt);
+      const flag = flagForLang(langCode);
       const downloadLink = r.link;
       const zipPath = path.join(TMP_DIR, `${imdbId}_${index}.zip`);
       const extractDir = path.join(TMP_DIR, `${imdbId}_${index}`);
@@ -142,14 +167,13 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
         const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
         if (srtFile) {
-          const flag = flagForLang(r.lang);
           subtitles.push({
             id: `formio-podnapisi-${index}`,
             url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${index}/${encodeURIComponent(srtFile)}`,
-            lang: r.lang.length === 2 ? r.lang : "xx",
+            lang: langCode,
             name: `${flag} ${r.title}`
           });
-          console.log(`📜 Najden SRT [#${index}]: ${srtFile} (${r.lang})`);
+          console.log(`📜 Najden SRT [#${index}]: ${srtFile} (${langCode})`);
           index++;
         }
       } catch (err) {
@@ -182,7 +206,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🌍 (vsi jeziki, brez prijave, z zastavicami) aktiven!");
+  console.log("✅ Formio Podnapisi.NET 🌍 (vsi jeziki, brez prijave, pravilni ISO jeziki) aktiven!");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
