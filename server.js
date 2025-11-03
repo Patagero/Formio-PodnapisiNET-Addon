@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "2.5.0",
+  version: "3.0.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Iskanje in prenos slovenskih podnapisov s podnapisi.net",
+  description: "Prijavljen dostop do slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -25,7 +25,31 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-const CACHE = new Map();
+const LOGIN_URL = "https://www.podnapisi.net/sl/login";
+const USERNAME = "patagero";
+const PASSWORD = "Formio1978";
+
+// 🔒 prijava in shranjevanje piškotkov
+async function ensureLoggedIn(page) {
+  const cookiesPath = path.join(TMP_DIR, "cookies.json");
+  if (fs.existsSync(cookiesPath)) {
+    const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
+    await page.setCookie(...cookies);
+    console.log("🍪 Uporabljeni shranjeni piškotki (login preskočen).");
+    return;
+  }
+
+  console.log("🔐 Prijavljam se v podnapisi.net ...");
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
+  await page.type("input[name='username']", USERNAME);
+  await page.type("input[name='password']", PASSWORD);
+  await page.click("button[type='submit']");
+  await page.waitForNavigation({ waitUntil: "networkidle2" });
+
+  const cookies = await page.cookies();
+  fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
+  console.log("✅ Prijava uspešna in piškotki shranjeni.");
+}
 
 async function getTitleFromIMDb(imdbId) {
   try {
@@ -35,8 +59,8 @@ async function getTitleFromIMDb(imdbId) {
       console.log(`🎬 IMDb → naslov: ${data.Title}`);
       return data.Title;
     }
-  } catch (err) {
-    console.log("⚠️ Napaka IMDb API:", err.message);
+  } catch {
+    console.log("⚠️ Napaka IMDb API");
   }
   return imdbId;
 }
@@ -44,8 +68,7 @@ async function getTitleFromIMDb(imdbId) {
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
-    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
-    defaultViewport: chromium.defaultViewport,
+    args: [...chromium.args, "--no-sandbox"],
     executablePath,
     headless: chromium.headless,
   });
@@ -56,46 +79,29 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
-  if (CACHE.has(imdbId)) {
-    console.log("⚡ Iz cache-a:", imdbId);
-    return res.json({ subtitles: CACHE.get(imdbId) });
-  }
-
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
   const browser = await getBrowser();
   const page = await browser.newPage();
+  await ensureLoggedIn(page);
+
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
-
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
-  try {
-    console.log("⌛ Čakam, da se naložijo rezultati (AJAX) ...");
-    await page.waitForSelector("table.table", { timeout: 20000 });
-    await page.waitForFunction(
-      () => document.querySelectorAll("a[href*='/download']").length > 0,
-      { timeout: 20000 }
-    );
-  } catch (err) {
-    console.log("⚠️ Rezultati se niso pojavili pravočasno:", err.message);
-  }
-
+  await page.waitForSelector("table.table tbody tr a[href*='/download']", { timeout: 20000 });
   const html = await page.content();
   const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
   fs.writeFileSync(dumpFile, html);
-  console.log(`📄 HTML dump shranjen v ${dumpFile}`);
 
-  // Izpiši prvih 1000 znakov HTML-ja za diagnostiko
-  console.log("🔍 HTML (prvih 1000 znakov):");
-  console.log(html.substring(0, 1000));
-
-  // Poiščemo vse slovenske povezave za prenos
-  const matches = [...html.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)];
-  await browser.close();
+  // 🔍 najdi vse slovenske povezave
+  const matches = await page.$$eval("table.table tbody tr a[href*='/download']", (els) =>
+    els.map((a) => a.getAttribute("href"))
+  );
 
   if (!matches.length) {
-    console.log("❌ Ni bilo mogoče najti slovenskih podnapisov.");
+    console.log("❌ Ni bilo najdenih slovenskih podnapisov.");
+    await browser.close();
     return res.json({ subtitles: [] });
   }
 
@@ -103,8 +109,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const subtitles = [];
   let index = 1;
 
-  for (const match of matches) {
-    const downloadLink = "https://www.podnapisi.net" + match[0];
+  for (const link of matches) {
+    const downloadLink = "https://www.podnapisi.net" + link;
     const zipPath = path.join(TMP_DIR, `${imdbId}_${index}.zip`);
     const extractDir = path.join(TMP_DIR, `${imdbId}_${index}`);
 
@@ -134,21 +140,20 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     }
   }
 
-  CACHE.set(imdbId, subtitles);
+  await browser.close();
   res.json({ subtitles });
-});
-
-// 🔍 Dodatna pot za ogled dump HTML datotek
-app.get("/dump/:id", (req, res) => {
-  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
-  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
-  else res.status(404).send("Dump file not found");
 });
 
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
   else res.status(404).send("Subtitle not found");
+});
+
+app.get("/dump/:id", (req, res) => {
+  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
+  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
+  else res.status(404).send("Dump not found");
 });
 
 app.get("/manifest.json", (req, res) => res.json(manifest));
@@ -158,6 +163,5 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
   console.log("✅ Formio Podnapisi.NET Addon 🇸🇮 aktiven!");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
-  console.log("🔗 Ogled dump: /dump/<imdbId>");
   console.log("==================================================");
 });
