@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.3.5",
+  version: "1.3.6",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -69,9 +69,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
-    // Počakaj, da stran v celoti naloži JS rezultate
     await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 120000 });
-    await page.waitForTimeout(10000);
+
+    // Čakamo dodatnih 10s
+    await new Promise(r => setTimeout(r, 10000));
 
     let downloadLink;
     try {
