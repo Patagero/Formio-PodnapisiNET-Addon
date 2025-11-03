@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.3.6",
+  version: "1.3.7",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -66,18 +66,29 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const browser = await getBrowser();
     const page = await browser.newPage();
 
+    // 🧩 Nastavi slovenski GLF piškotek
+    await page.setCookie({
+      name: "glf",
+      value: "sl",
+      domain: ".podnapisi.net",
+      path: "/",
+    });
+
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
     console.log("🌍 Iščem z Puppeteer:", searchUrl);
 
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 120000 });
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
 
-    // Čakamo dodatnih 10s
-    await new Promise(r => setTimeout(r, 10000));
+    // Počakamo, da JS naloži tabele
+    await new Promise(r => setTimeout(r, 15000));
 
     let downloadLink;
     try {
-      await page.waitForSelector("a[href*='/download']", { timeout: 60000 });
-      downloadLink = await page.$eval("a[href*='/download']", el => el.href);
+      await page.waitForSelector("a[href*='/download'], .downloads a, table a[href*='/download']", { timeout: 60000 });
+      downloadLink = await page.$eval(
+        "a[href*='/download'], .downloads a, table a[href*='/download']",
+        el => el.href
+      );
       console.log("✅ Najden prenos (selector):", downloadLink);
     } catch {
       console.log("⚠️ Selector ni našel povezave, preklapljam na regex iskanje...");
@@ -86,6 +97,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       if (match && match.length > 0) {
         downloadLink = "https://www.podnapisi.net" + match[0];
         console.log("✅ Najden prenos (regex):", downloadLink);
+      } else {
+        console.log("❌ Regex tudi ni našel povezav.");
       }
     }
 
