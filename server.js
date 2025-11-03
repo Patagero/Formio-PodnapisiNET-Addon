@@ -11,38 +11,35 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ========================
-// 📜 Manifest
-// ========================
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "5.2.0",
+  version: "5.3.1",
   name: "Formio Podnapisi.NET 🌍",
-  description: "Išče vse jezike (brez prijave) – s pravilnimi jezikovnimi kodami in zastavicami",
+  description: "Išče podnapise vseh jezikov (brez prijave) z natančnimi zastavicami in jeziki",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
-  idPrefixes: ["tt"],
+  idPrefixes: ["tt"]
 };
 
-// ========================
-// 🗂️ Mape in cache
-// ========================
+// 📁 začasna mapa in cache
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const CACHE_FILE = path.join(TMP_DIR, "cache.json");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
 
 function loadCache() {
-  try { return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); } catch { return {}; }
+  try {
+    return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+  } catch {
+    return {};
+  }
 }
 function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 }
 
-// ========================
-// 🏳️ Pretvorba jezika → ISO koda + zastavica
-// ========================
+// 🏳️ pretvorba imena jezika → ISO koda + zastavica
 function normalizeLang(name) {
   if (!name) return "xx";
   const langName = name.toLowerCase();
@@ -75,9 +72,7 @@ function flagForLang(lang) {
   return map[lang] || "🌐";
 }
 
-// ========================
 // 🎬 IMDb → naslov
-// ========================
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -92,9 +87,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ========================
 // 🧩 Zagon Chromium
-// ========================
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -104,9 +97,7 @@ async function getBrowser() {
   });
 }
 
-// ========================
-// 🎞️ Glavna pot za podnapise (vsi jeziki, brez prijave)
-// ========================
+// 🔍 Glavna pot za podnapise (vsi jeziki, brez prijave)
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
@@ -123,9 +114,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const browser = await getBrowser();
   const page = await browser.newPage();
-
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}`;
   console.log(`🌍 Iščem vse podnapise: ${searchUrl}`);
+
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
   try {
@@ -150,9 +141,11 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const subtitles = [];
     let index = 1;
 
-    for (const r of results.slice(0, 30)) { // omejimo na 30 zadetkov
+    for (const r of results.slice(0, 40)) {
       const langCode = normalizeLang(r.langAlt);
       const flag = flagForLang(langCode);
+      const finalLang = langCode?.toLowerCase() || "xx";
+
       const downloadLink = r.link;
       const zipPath = path.join(TMP_DIR, `${imdbId}_${index}.zip`);
       const extractDir = path.join(TMP_DIR, `${imdbId}_${index}`);
@@ -170,10 +163,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
           subtitles.push({
             id: `formio-podnapisi-${index}`,
             url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${index}/${encodeURIComponent(srtFile)}`,
-            lang: langCode,
-            name: `${flag} ${r.title}`
+            lang: finalLang,
+            name: `${flag} ${r.title} (${finalLang.toUpperCase()})`
           });
-          console.log(`📜 Najden SRT [#${index}]: ${srtFile} (${langCode})`);
+          console.log(`📜 Najden SRT [#${index}]: ${srtFile} (${finalLang})`);
           index++;
         }
       } catch (err) {
@@ -206,7 +199,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🌍 (vsi jeziki, brez prijave, pravilni ISO jeziki) aktiven!");
+  console.log("✅ Formio Podnapisi.NET 🌍 (vsi jeziki, pravilne oznake, cache) aktiven!");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
