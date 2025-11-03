@@ -13,13 +13,31 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "3.3.0",
+  version: "3.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Iskanje slovenskih podnapisov s prijavo preko uporabniških podatkov iz Stremio nastavitev",
+  description: "Samodejno išče slovenske podnapise s prijavo uporabnika v podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
   idPrefixes: ["tt"],
+  behaviorHints: {
+    configurable: true,
+    configurationRequired: true,
+  },
+  configuration: [
+    {
+      key: "username",
+      type: "text",
+      name: "Uporabniško ime",
+      description: "Vnesi svoje uporabniško ime za podnapisi.net",
+    },
+    {
+      key: "password",
+      type: "password",
+      name: "Geslo",
+      description: "Vnesi svoje geslo za podnapisi.net",
+    },
+  ],
 };
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
@@ -27,7 +45,7 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 
-// 🔒 prijava v podnapisi.net (dinamična iz nastavitev)
+// 🔒 prijava v podnapisi.net (uporablja podatke iz settings)
 async function ensureLoggedIn(page, username, password) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
 
@@ -122,10 +140,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   try {
     await page.waitForSelector("table.table tbody tr", { timeout: 20000 });
 
-    const html = await page.content();
-    const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
-    fs.writeFileSync(dumpFile, html);
-
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows
         .map((row) => {
@@ -191,13 +205,6 @@ app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
   else res.status(404).send("Subtitle not found");
-});
-
-// 📄 HTML dump za debug
-app.get("/dump/:id", (req, res) => {
-  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
-  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
-  else res.status(404).send("Dump not found");
 });
 
 // 📜 Manifest
