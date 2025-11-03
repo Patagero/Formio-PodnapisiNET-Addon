@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "2.3.0",
+  version: "2.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Prikaz vseh slovenskih podnapisov s podnapisi.net (asinkroni način)",
+  description: "Pridobi vse slovenske podnapise s podnapisi.net (zanesljivo čakanje na AJAX)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -71,21 +71,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
   try {
-    // počakaj do 10 sekund, da AJAX naloži podnapise
-    await page.waitForSelector("table tr a[href*='/download']", { timeout: 10000 });
-  } catch {
-    console.log("⚠️ Ni še nalaganja rezultatov — čakamo dodatno 10 sekund ...");
-    try {
-      await page.waitForFunction(
-        () => document.querySelectorAll("a[href*='/download']").length > 0,
-        { timeout: 10000 }
-      );
-    } catch {
-      console.log("❌ Ni bilo mogoče najti podnapisov po 20 sekundah.");
-    }
+    console.log("⌛ Čakam, da se naložijo rezultati (AJAX) ...");
+    // najprej čakaj na glavno tabelo
+    await page.waitForSelector("table.table", { timeout: 15000 });
+
+    // potem čakaj, da ima tabela vsaj nekaj vrstic (rezultate)
+    await page.waitForFunction(
+      () => document.querySelectorAll("table.table tr a[href*='/download']").length > 2,
+      { timeout: 15000 }
+    );
+  } catch (err) {
+    console.log("⚠️ Rezultati se niso pojavili pravočasno:", err.message);
   }
 
   const html = await page.content();
+  const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
+  fs.writeFileSync(dumpFile, html);
+  console.log(`📄 HTML dump shranjen v ${dumpFile}`);
+
   const matches = [...html.matchAll(/\/sl\/subtitles\/[a-z0-9\-]+\/[A-Z0-9]+\/download/g)];
   await browser.close();
 
@@ -143,7 +146,7 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
   console.log("✅ Formio Podnapisi.NET Addon 🇸🇮 aktiven!");
-  console.log("🌍 Prikaže VSE slovenske podnapise (počaka na AJAX).");
+  console.log("🌍 Počaka na AJAX in shrani HTML dump (razhroščevalno).");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
