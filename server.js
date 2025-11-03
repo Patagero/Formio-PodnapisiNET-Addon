@@ -11,9 +11,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 📜 Manifest za Stremio
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.4.0",
+  version: "1.5.0",
   name: "Formio Podnapisi.NET",
   description: "Samodejno iskanje slovenskih in angleških podnapisov s podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -22,10 +23,11 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
+// 📂 Začasna mapa
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// 🎬 IMDb → naslov filma
+// 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   const apiKey = "thewdb";
   const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
@@ -42,7 +44,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔧 Puppeteer browser
+// 🧩 Pridobi Puppeteer browser
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -53,7 +55,7 @@ async function getBrowser() {
   });
 }
 
-// 🔍 Glavna pot
+// 🔍 Iskanje podnapisov
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
@@ -66,23 +68,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const browser = await getBrowser();
     const page = await browser.newPage();
 
-    // Nastavi jezikovni filter (GLF)
-    await page.setCookie({
-      name: "glf",
-      value: language,
-      domain: ".podnapisi.net",
-      path: "/"
-    });
+    // 🧠 Piškotki za globalni filter (GLF)
+    await page.setCookie(
+      { name: "glf", value: language, domain: ".podnapisi.net", path: "/" },
+      { name: "global_language_filter", value: language, domain: ".podnapisi.net", path: "/" },
+      { name: "filter_language", value: language, domain: ".podnapisi.net", path: "/" }
+    );
+
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    );
 
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=${language}`;
     console.log(`🌍 Iščem (${language}): ${searchUrl}`);
 
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await new Promise(r => setTimeout(r, 15000)); // dodatni čas za nalaganje
+    await new Promise(r => setTimeout(r, 15000)); // čakaj 15s da se naloži vse
 
     let downloadLink = null;
-
-    // Poskusimo več selektorjev
     const selectors = [
       "a[href*='/download']",
       ".downloads a",
@@ -101,7 +104,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       } catch {}
     }
 
-    // Če še vedno ni, uporabimo regex
+    // Regex fallback
     if (!downloadLink) {
       console.log("⚠️ Selector ni našel povezave, preklapljam na regex iskanje...");
       const html = await page.content();
@@ -163,7 +166,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 });
 
-// 📂 Dostop do datotek
+// 📂 Datoteke
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
