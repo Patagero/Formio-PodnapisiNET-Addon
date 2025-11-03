@@ -11,44 +11,59 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ========================
+// 📜 Manifest z dual-mode
+// ========================
 const manifest = {
   id: "org.formio.podnapisi",
   version: "3.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise s prijavo uporabnika v podnapisi.net",
+  description:
+    "Samodejno išče slovenske podnapise s podnapisi.net — z ali brez prijave.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
   idPrefixes: ["tt"],
   behaviorHints: {
-    configurable: true,
-    configurationRequired: true,
+    configurable: true, // omogoča Configure
+    configurationRequired: false // omogoča tudi Install brez prijave ✅
   },
   configuration: [
     {
       key: "username",
       type: "text",
       name: "Uporabniško ime",
-      description: "Vnesi svoje uporabniško ime za podnapisi.net",
+      description:
+        "Neobvezno – vnesi uporabniško ime za podnapisi.net (za več rezultatov)"
     },
     {
       key: "password",
       type: "password",
       name: "Geslo",
-      description: "Vnesi svoje geslo za podnapisi.net",
-    },
-  ],
+      description:
+        "Neobvezno – vnesi geslo za podnapisi.net (za dostop do vseh podnapisov)"
+    }
+  ]
 };
 
+// ========================
+// 🗂️ Nastavitve poti
+// ========================
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 
-// 🔒 prijava v podnapisi.net (uporablja podatke iz settings)
+// ========================
+// 🔒 Funkcija za prijavo
+// ========================
 async function ensureLoggedIn(page, username, password) {
-  const cookiesPath = path.join(TMP_DIR, "cookies.json");
+  if (!username || !password) {
+    console.log("🚫 Brez prijave (anonimni način).");
+    return;
+  }
 
+  const cookiesPath = path.join(TMP_DIR, "cookies.json");
   if (fs.existsSync(cookiesPath)) {
     const cookies = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
     await page.setCookie(...cookies);
@@ -56,42 +71,42 @@ async function ensureLoggedIn(page, username, password) {
     return;
   }
 
-  if (!username || !password) {
-    console.log("⚠️ Uporabniško ime ali geslo ni podano — prijava preskočena.");
-    return;
-  }
-
-  console.log(`🔐 Prijavljam se kot '${username}' ...`);
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+  console.log("🔐 Prijavljam se v podnapisi.net ...");
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
 
   try {
-    await page.waitForSelector("form[action*='login'] input[name='username']", { timeout: 20000 });
-    await page.type("input[name='username']", username, { delay: 25 });
-    await page.type("input[name='password']", password, { delay: 25 });
+    await page.waitForSelector("form[action*='login'] input[name='username']", {
+      timeout: 20000
+    });
+    await page.type("input[name='username']", username, { delay: 30 });
+    await page.type("input[name='password']", password, { delay: 30 });
 
     const loginButton =
       (await page.$("form[action*='login'] button")) ||
       (await page.$("form[action*='login'] input[type='submit']"));
     if (loginButton) await loginButton.click();
 
-    console.log("⌛ Čakam, da se potrdi prijava ...");
+    console.log("⌛ Čakam na potrditev prijave ...");
     await page.waitForFunction(
-      () => {
-        const text = document.body.innerText;
-        return text.includes("Odjava") || text.includes("Moj profil") || text.includes(username);
-      },
-      { timeout: 30000 }
+      () =>
+        document.body.innerText.includes("Odjava") ||
+        document.body.innerText.includes("Moj profil") ||
+        document.body.innerText.includes("Profil"),
+      { timeout: 20000 }
     );
-
-    console.log("✅ Prijava uspešna (prepoznan uporabnik).");
-    const cookies = await page.cookies();
-    fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
+    console.log("✅ Prijava uspešna!");
   } catch (err) {
-    console.log("⚠️ Napaka pri prijavi:", err.message);
+    console.log("⚠️ Napaka pri prijavi ali captcha:", err.message);
   }
+
+  const cookies = await page.cookies();
+  fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2));
+  console.log("💾 Piškotki shranjeni za prihodnjo uporabo.");
 }
 
-// 🔎 IMDb → naslov
+// ========================
+// 🔍 IMDb → naslov
+// ========================
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -106,39 +121,48 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔧 zagon Chromium
+// ========================
+// 🧩 Zagon Chromium
+// ========================
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
     args: [...chromium.args, "--no-sandbox"],
     executablePath,
-    headless: chromium.headless,
+    headless: chromium.headless
   });
 }
 
-// 🧩 Glavna pot za podnapise
+// ========================
+// 🎞️ Glavna pot za podnapise
+// ========================
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
-  const username = req.query.username;
-  const password = req.query.password;
+  const username = req.query.username || null;
+  const password = req.query.password || null;
 
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
-  if (username) console.log(`👤 Uporabnik: ${username}`);
-  else console.log("⚠️ Brez uporabniškega imena — delujem brez prijave");
+  if (username) console.log(`👤 Prijava uporabnika: ${username}`);
 
   const title = await getTitleFromIMDb(imdbId);
   const query = encodeURIComponent(title);
+
   const browser = await getBrowser();
   const page = await browser.newPage();
+
   await ensureLoggedIn(page, username, password);
 
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}&language=sl`;
   console.log(`🌍 Iščem slovenske podnapise: ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
   try {
     await page.waitForSelector("table.table tbody tr", { timeout: 20000 });
+
+    const html = await page.content();
+    const dumpFile = path.join(TMP_DIR, `${imdbId}.html`);
+    fs.writeFileSync(dumpFile, html);
 
     const results = await page.$$eval("table.table tbody tr", (rows) =>
       rows
@@ -181,7 +205,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
               srtFile
             )}`,
             lang: "sl",
-            name: `🇸🇮 ${r.title}`,
+            name: `Formio Podnapisi.NET 🇸🇮 - ${r.title}`
           });
           console.log(`📜 Najden SRT [#${index}]: ${srtFile}`);
           index++;
@@ -205,6 +229,13 @@ app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) res.sendFile(filePath);
   else res.status(404).send("Subtitle not found");
+});
+
+// 📄 HTML dump za debug
+app.get("/dump/:id", (req, res) => {
+  const dumpFile = path.join(TMP_DIR, `${req.params.id}.html`);
+  if (fs.existsSync(dumpFile)) res.sendFile(dumpFile);
+  else res.status(404).send("Dump not found");
 });
 
 // 📜 Manifest
