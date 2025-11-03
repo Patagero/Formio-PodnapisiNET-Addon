@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "1.6.0",
+  version: "1.7.0",
   name: "Formio Podnapisi.NET",
-  description: "Samodejno iskanje slovenskih in angleških podnapisov s podnapisi.net",
+  description: "Samodejno iskanje slovenskih podnapisov s podnapisi.net (hitro in stabilno)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -25,35 +25,29 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// 🔄 Preprost cache (RAM)
+// 🧠 Preprost cache
 const CACHE = new Map();
-const cacheGet = key => CACHE.get(key);
-const cacheSet = (key, val) => {
-  CACHE.set(key, { val, time: Date.now() });
-  if (CACHE.size > 10) CACHE.delete([...CACHE.keys()][0]);
-};
+const cacheGet = k => CACHE.get(k);
+const cacheSet = (k, v) => { CACHE.set(k, v); if (CACHE.size > 20) CACHE.delete([...CACHE.keys()][0]); };
 
 // 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   const apiKey = "thewdb";
-  const url = `https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`;
   try {
-    const res = await fetch(url);
+    const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=${apiKey}`);
     const data = await res.json();
     if (data?.Title) {
       console.log(`🎬 IMDb → naslov: ${data.Title}`);
       return data.Title;
     }
-  } catch {
-    return imdbId;
-  }
+  } catch {}
   return imdbId;
 }
 
 async function getBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
-    args: chromium.args,
+    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
     defaultViewport: chromium.defaultViewport,
     executablePath,
     headless: chromium.headless,
@@ -68,7 +62,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const cached = cacheGet(imdbId);
   if (cached) {
     console.log("⚡ Iz cache-a:", imdbId);
-    return res.json({ subtitles: cached.val });
+    return res.json({ subtitles: cached });
   }
 
   const title = await getTitleFromIMDb(imdbId);
@@ -82,16 +76,17 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     );
 
-    const searchUrl = `https://www.podnapisi.net/en/subtitles/search/?keywords=${query}`;
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${query}`;
     console.log(`🌍 Iščem (${language}): ${searchUrl}`);
+
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-    // Če iščemo slovenske, klikni filter v levem meniju
+    // Klikni filter Slovenščina, če obstaja
     if (language === "sl") {
       try {
-        await page.waitForSelector("label[for*='sl']", { timeout: 5000 });
+        await page.waitForSelector("label[for*='sl']", { timeout: 4000 });
         await page.click("label[for*='sl']");
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2500);
         console.log("🇸🇮 Filter 'Slovenščina' aktiviran");
       } catch {
         console.log("⚠️ Ni bilo mogoče klikniti 'Slovenščina'");
@@ -100,8 +95,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
     let downloadLink = null;
     const selectors = [
-      "a[href*='/download']",
       "table a[href*='/download']",
+      "a[href*='/download']",
       ".downloads a"
     ];
 
@@ -157,7 +152,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       return res.json({ subtitles: [] });
     }
 
-    const result = [
+    const subtitles = [
       {
         id: "formio-podnapisi",
         url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}/${encodeURIComponent(srtFile)}`,
@@ -166,9 +161,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       }
     ];
 
-    cacheSet(imdbId, result);
+    cacheSet(imdbId, subtitles);
     console.log("📜 Najden SRT:", srtFile);
-    res.json({ subtitles: result });
+    res.json({ subtitles });
   } catch (err) {
     console.error("❌ Napaka:", err.message);
     res.json({ subtitles: [] });
