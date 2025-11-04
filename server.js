@@ -13,10 +13,10 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.0.0",
+  version: "9.1.0",
   name: "Formio Podnapisi.NET 🇸🇮",
   description:
-    "Takojšnji odziv z '⏳ Nalagam podnapise…' + tihi Puppeteer refresh + cache (samo slovenski podnapisi)",
+    "Išče slovenske podnapise s takojšnjim odgovorom in fallback regex sistemom (hitro delovanje brez prijave)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -77,8 +77,8 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔍 Pridobi podnapise prek API odziva
-async function fetchSubtitlesForLang(browser, title) {
+// 🔍 Pridobi slovenske podnapise (API + regex fallback)
+async function fetchSubtitles(browser, title) {
   const page = await browser.newPage();
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
     title
@@ -95,19 +95,41 @@ async function fetchSubtitlesForLang(browser, title) {
   });
 
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  for (let i = 0; i < 20 && !ajax; i++) await new Promise((r) => setTimeout(r, 500));
-  await page.close();
 
-  if (!ajax?.subtitles?.length) {
-    console.log("⚠️ Ni slovenskih rezultatov");
-    return [];
+  for (let i = 0; i < 30 && !ajax; i++) {
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  console.log(`✅ Najdenih ${ajax.subtitles.length} 🇸🇮`);
+  if (!ajax?.subtitles?.length) {
+    const html = await page.content();
+    const results = [];
+    const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const link = "https://www.podnapisi.net" + match[1];
+      const subTitle = match[2].trim();
+      if (subTitle) results.push({ link, title: subTitle });
+    }
+    await page.close();
+
+    if (!results.length) {
+      console.log("⚠️ Ni slovenskih rezultatov (niti po regexu)");
+      return [];
+    }
+
+    console.log(`✅ Najdenih ${results.length} 🇸🇮 (regex fallback)`);
+    return results.map((r, i) => ({
+      link: r.link,
+      title: r.title,
+      index: i + 1,
+    }));
+  }
+
+  await page.close();
+  console.log(`✅ Najdenih ${ajax.subtitles.length} 🇸🇮 (API način)`);
   return ajax.subtitles.map((s, i) => ({
     link: "https://www.podnapisi.net" + s.url,
     title: s.release || s.title || "Neznan",
-    rating: s.rating || 0,
     index: i + 1,
   }));
 }
@@ -121,7 +143,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const cache = loadCache();
   const cached = cache[imdbId];
 
-  // ⚡ Takojšnji dummy odziv
+  // ⚡ Takojšnji dummy odgovor za Stremio
   res.json({
     subtitles: cached?.data?.length
       ? cached.data
@@ -140,20 +162,25 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     try {
       const title = await getTitleFromIMDb(imdbId);
       const browser = await getBrowser();
-      const sl = await fetchSubtitlesForLang(browser, title);
+      const slResults = await fetchSubtitles(browser, title);
 
-      const subs = sl.map((r, i) => ({
+      if (!slResults.length) {
+        console.log(`❌ Ni slovenskih podnapisov za ${title}`);
+        return;
+      }
+
+      const subtitles = slResults.map((r, i) => ({
         id: `formio-${i + 1}`,
         url: r.link,
         lang: "sl",
-        name: `${langMap["sl"]} ${r.title} (SLO)`,
+        name: `${langMap.sl} ${r.title} (SLO)`,
       }));
 
-      cache[imdbId] = { timestamp: Date.now(), data: subs };
+      cache[imdbId] = { timestamp: Date.now(), data: subtitles };
       saveCache(cache);
-      console.log(`♻️ Osveženi podatki (${subs.length}) za ${title}`);
+      console.log(`♻️ Osveženi podatki (${subtitles.length}) za ${title}`);
     } catch (e) {
-      console.log("⚠️ Napaka pri osvežitvi:", e.message);
+      console.log("⚠️ Napaka pri iskanju:", e.message);
     }
   })();
 });
@@ -165,7 +192,8 @@ setInterval(() => {
   for (const f of files) {
     const full = path.join(TMP_DIR, f);
     const stat = fs.statSync(full);
-    if (now - stat.mtimeMs > 24 * 60 * 60 * 1000) fs.rmSync(full, { recursive: true, force: true });
+    if (now - stat.mtimeMs > 24 * 60 * 60 * 1000)
+      fs.rmSync(full, { recursive: true, force: true });
   }
 }, 60 * 60 * 1000);
 
@@ -175,7 +203,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 instant verzija (dummy + background refresh + cache)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 – instant dummy + AJAX/regex fallback + cache");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
