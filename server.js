@@ -11,9 +11,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.5.0", // Posodobljena verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Ultra Stabilno)",
-  description: "Išče slovenske podnapise preko Google iskalnika z agresivnim parsanjem in filtrira po nazivu.",
+  version: "8.6.0", // Posodobljena verzija
+  name: "Formio Podnapisi.NET 🇸🇮 (DDG Search)",
+  description: "Išče slovenske podnapise preko DuckDuckGo iskalnika za obvod blokade in filtrira po nazivu.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -59,45 +59,45 @@ async function getTitleAndYear(imdbId) {
 }
 
 /**
- * Iskanje podnapisov s pomočjo Google iskalnika (site:podnapisi.net).
+ * Iskanje podnapisov s pomočjo DuckDuckGo iskalnika (site:podnapisi.net).
  * @returns Array of { link: string, title: string }
  */
-async function fetchSubtitlesViaGoogle(title, year) {
-    const searchKeywords = `site:podnapisi.net/sl/podnapisi/ ${title} ${year || ""}`;
-    const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchKeywords)}`;
-    console.log(`🌍 Iščem preko Googla: ${googleSearchUrl}`);
+async function fetchSubtitlesViaDDG(title, year) {
+    // Opustimo iskanje letnice za prihodnje filme, da ne pokvari niza
+    const targetYear = parseInt(year);
+    const currentYear = new Date().getFullYear();
+    const useYear = targetYear && targetYear <= currentYear ? year : "";
+
+    const searchKeywords = `site:podnapisi.net/sl/podnapisi/ ${title} ${useYear}`;
+    const ddgSearchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(searchKeywords)}`;
+    console.log(`🌍 Iščem preko DuckDuckGo: ${ddgSearchUrl}`);
 
     try {
-        const res = await fetch(googleSearchUrl, {
+        const res = await fetch(ddgSearchUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         const html = await res.text();
         
-        // POSODOBITEV REGEXA: Iščemo širši nabor URL-jev na podnapisi.net
-        const regex = /<a href="(\/url\?q=https:\/\/www\.podnapisi\.net\/[^&]+)"[^>]*>(.*?)<\/a>/g;
+        // Regex za DDG HTML: Iščemo direktne linke, ki se začnejo s podnapisi.net/sl/podnapisi/
+        const regex = /<a rel="nofollow" href="(https?:\/\/www\.podnapisi\.net\/sl\/podnapisi\/[^"]+)"[^>]*>(.*?)<\/a>/g;
         let match;
         const results = [];
 
         while ((match = regex.exec(html)) !== null) {
-            const googleUrl = match[1];
+            const podnapisiUrl = match[1];
             
-            // Dekodiramo in preverimo, če je to link s podnapisi
-            const finalUrlMatch = decodeURIComponent(googleUrl).match(/url\?q=(https:\/\/www\.podnapisi\.net\/sl\/podnapisi\/[^\s&]+)/);
+            // Preprečimo dodajanje ponavljajočih se rezultatov
+            if (results.some(r => r.url === podnapisiUrl)) continue;
 
-            if (finalUrlMatch) {
-                const podnapisiUrl = finalUrlMatch[1];
-                
-                // Preprečimo dodajanje ponavljajočih se rezultatov
-                if (results.some(r => r.url === podnapisiUrl)) continue;
-
-                // Čiščenje naslova iz Googlovih rezultatov (match[2])
-                const titleMatch = match[2].replace(/<[^>]*>/g, '').trim(); 
-                
-                // Pretvorimo URL s podrobnostmi v URL za prenos (download)
-                const downloadLink = podnapisiUrl.replace(/\/$/, "") + '/download';
-                
+            const titleMatch = match[2].replace(/<[^>]*>/g, '').trim(); 
+            
+            // Pretvorimo URL s podrobnostmi v URL za prenos (download)
+            const downloadLink = podnapisiUrl.replace(/\/$/, "") + '/download';
+            
+            // Filtriramo rezultate s praznim naslovom
+            if (titleMatch) {
                 results.push({ 
                     link: downloadLink, 
                     title: titleMatch,
@@ -106,11 +106,11 @@ async function fetchSubtitlesViaGoogle(title, year) {
             }
         }
         
-        console.log(`✅ Najdenih ${results.length} URL-jev preko Googla.`);
+        console.log(`✅ Najdenih ${results.length} URL-jev preko DDG.`);
         return results;
 
     } catch (error) {
-        console.error("❌ Napaka pri iskanju preko Googla:", error.message);
+        console.error("❌ Napaka pri iskanju preko DDG:", error.message);
         return [];
     }
 }
@@ -135,7 +135,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  const slResults = await fetchSubtitlesViaGoogle(title, year);
+  // Uporabi DDG
+  const slResults = await fetchSubtitlesViaDDG(title, year);
   
   // 3. 🧠 FILTER: Manj agresiven, osredotočen na ključne besede
   
@@ -151,8 +152,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     
     // 2. Izločanje serijskih/napačnih formatov
     const isWrongFormat = 
-        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || // Film ne sme vsebovati S/E
-        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); // Serija mora vsebovati S/E
+        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || 
+        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
 
     // LOGIRANJE IZLOČITEV
     if (!keywordsMatch) console.log(`🚫 Izločen (ne ustreza ključnim besedam): ${r.title}`);
@@ -243,8 +244,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.5.0)");
-  console.log("🌐 Sedaj iščemo z najagresivnejšim Google parserjem.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.6.0)");
+  console.log("🌐 Sedaj iščemo preko DuckDuckGo Bypass metode.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
