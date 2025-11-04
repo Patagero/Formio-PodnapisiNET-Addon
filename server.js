@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.0.0",
+  version: "8.1.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče slovenske podnapise z razširjenim filtrom in podrobnim logom",
+  description: "Išče vse slovenske podnapise brez filtra, s prijavo in cache sistemom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -95,12 +95,12 @@ async function getTitleAndYear(imdbId) {
     const data = await res.json();
     if (data?.Title) {
       console.log(`🎬 IMDb → ${data.Title} (${data.Year})`);
-      return { title: data.Title.trim(), year: data.Year || "", type: data.Type || "movie" };
+      return { title: data.Title.trim(), year: data.Year || "" };
     }
   } catch {
     console.log("⚠️ Napaka IMDb API");
   }
-  return { title: imdbId, year: "", type: "movie" };
+  return { title: imdbId, year: "" };
 }
 
 async function fetchSubtitlesForLang(browser, title, langCode) {
@@ -111,9 +111,7 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise(r => setTimeout(r, 2500));
 
-  const html = await page.content();
   let results = [];
-
   try {
     results = await page.$$eval("table.table tbody tr", (rows) =>
       rows.map((row) => {
@@ -123,12 +121,12 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
       }).filter(Boolean)
     );
   } catch {
+    console.log("⚠️ Fallback: regex parse");
+    const html = await page.content();
     const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
     let match;
     while ((match = regex.exec(html)) !== null) {
-      const link = "https://www.podnapisi.net" + match[1];
-      const title = match[2].trim();
-      results.push({ link, title });
+      results.push({ link: "https://www.podnapisi.net" + match[1], title: match[2].trim() });
     }
   }
 
@@ -147,39 +145,13 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  const { title, year } = await getTitleAndYear(imdbId);
+  const { title } = await getTitleAndYear(imdbId);
   const browser = await getBrowser();
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
-
-  // 🧠 Razširjen filter – tolerantno ujemanje
-  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const cleanYear = (year || "").replace(/\D+/g, "");
-
-  const filteredResults = slResults.filter(r => {
-    const t = r.title.toLowerCase();
-    const normalized = t.replace(/[^a-z0-9]+/g, "");
-
-    const titleOk =
-      normalized.includes(cleanTitle) ||
-      normalized.startsWith(cleanTitle) ||
-      normalized.includes(cleanTitle + cleanYear) ||
-      (cleanYear && normalized.includes(cleanYear) && normalized.includes(cleanTitle.slice(0, 4)));
-
-    const has2025 = cleanYear ? normalized.includes(cleanYear) : true;
-    const isWrong = /(saints|lois|supergirl|series|season|episode|batman)/.test(t);
-
-    if (!titleOk) console.log(`🚫 Izločen (ni ujemanja): ${r.title}`);
-    if (isWrong) console.log(`🚫 Izločen (napačen): ${r.title}`);
-
-    return titleOk && !isWrong && has2025;
-  });
-
-  console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
-
-  if (!filteredResults.length) {
+  if (!slResults.length) {
     console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
     return res.json({ subtitles: [] });
   }
@@ -187,7 +159,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const subtitles = [];
   let idx = 1;
 
-  for (const r of filteredResults) {
+  for (const r of slResults) {
     const downloadLink = r.link;
     const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
     const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
@@ -233,7 +205,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (razširjen filter + prijava + log izločitev)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (brez filtra, vse slovenske datoteke)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
