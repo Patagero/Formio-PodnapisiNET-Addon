@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.4.0",
+  version: "7.5.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče slovenske podnapise s prijavo, cache in pametnim filtrom",
+  description: "Išče slovenske podnapise s prijavo, cache in izboljšanim filtrom (The.Sinners, .2025 podpora)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -154,12 +154,16 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🎯 Natančen filter – odstrani druge naslove z “sinners”, “saints”, “lois” ipd.
+  // 🎯 Izboljšan filter: ujame “The.Sinners”, “Sinners.2025” ipd., izloči “Saints and Sinners”, “Lois” itd.
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     const normalized = t.replace(/[^a-z0-9]+/g, "");
-    const isMatch = normalized.startsWith(cleanTitle) || normalized.includes(cleanTitle);
+    const isMatch =
+      normalized.includes(cleanTitle) ||
+      normalized.startsWith("the" + cleanTitle) ||
+      normalized.startsWith(cleanTitle + "20") ||
+      normalized.startsWith(cleanTitle + year);
     const isWrong = /(saints|lois|series|episode)/.test(t);
     return isMatch && !isWrong;
   });
@@ -220,7 +224,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (precizen filter + login + cache)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (boljši filter + cache + prijava)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
