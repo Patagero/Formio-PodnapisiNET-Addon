@@ -18,7 +18,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.2.1", // Prijavni podatki vstavljeni
+  version: "9.2.2", // Popravljena napaka ReferenceError
   name: "Formio Podnapisi.NET 🇸🇮 (Puppeteer + Login)",
   description: "Uporablja Puppeteer za prijavo in nato iskanje, da pridobi seansko stanje.",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -44,6 +44,27 @@ function loadCache() {
 function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 }
+
+// --- POMOŽNE FUNKCIJE ---
+
+async function getTitleAndYear(imdbId) {
+  try {
+    const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
+    const data = await res.json();
+    if (data?.Title) {
+      console.log(`🎬 IMDb → ${data.Title} (${data.Year}) [Tip: ${data.Type}]`);
+      return { 
+          title: data.Title.trim(), 
+          year: data.Year || "", 
+          type: data.Type || "movie",
+      };
+    }
+  } catch {
+    console.log("⚠️ Napaka IMDb API");
+  }
+  return { title: imdbId, year: "", type: "movie" };
+}
+
 
 // --- PUPPETEER/CHROMIUM & LOGIN FUNKCIJE ---
 let globalBrowser = null;
@@ -143,8 +164,6 @@ async function ensureLoggedIn(browser) {
   }
 }
 
-// ... (funkcija getTitleAndYear je enaka)
-
 /**
  * Iskanje podnapisov Z UPORABO PRIJAVLJENE SEJE.
  */
@@ -241,7 +260,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   // 3. 🧠 FILTER
   const slResults = allResults.filter(r => r.lang === 'sl');
   
-  // ... (Logika filtriranja, kot v prejšnjih različicah)
+  // ... (Logika filtriranja)
   
   const currentYear = new Date().getFullYear();
   const targetYear = parseInt(year);
@@ -352,7 +371,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.2.1)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.2.2)");
   console.log(`🔑 PRIJAVA AKTIVNA: Uporabnik ${PN_USER} poskuša vzpostaviti sejo.`);
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
