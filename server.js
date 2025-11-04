@@ -13,7 +13,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.6.0",
+  version: "7.6.1",
   name: "Formio Podnapisi.NET 🇸🇮",
   description: "Hitrejše iskanje slovenskih podnapisov z ohlapnim filtrom (.2025, The.Sinners, ipd.)",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -80,7 +80,7 @@ async function ensureLoggedIn(page) {
     );
     console.log("✅ Prijava uspešna.");
   } catch {
-    console.log(⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
+    console.log("⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
   }
 
   const cookies = await page.cookies();
