@@ -1,13 +1,19 @@
-// ... [uvozi ostanejo enaki kot v tvoji izvorni kodi]
+import express from "express";
+import cors from "cors";
+import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
+import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
+import AdmZip from "adm-zip";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Manifest ostane enak
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.0.0",
+  version: "9.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
   description: "Išče slovenske podnapise z razširjenim filtrom in podrobnim logom",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -16,7 +22,16 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// ... [nastavitve TMP_DIR, CACHE_FILE, LOGIN_URL, USERNAME, PASSWORD ostanejo enake]
+const TMP_DIR = path.join(process.cwd(), "tmp");
+const CACHE_FILE = path.join(TMP_DIR, "cache.json");
+const LOGIN_URL = "https://www.podnapisi.net/sl/login";
+const USERNAME = "patagero";
+const PASSWORD = "Formio1978";
+
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
+
+const langMap = { sl: "🇸🇮" };
 
 function loadCache() {
   try { return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); }
@@ -191,18 +206,3 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
           url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${idx}/${encodeURIComponent(srtFile)}`,
           lang: r.lang,
           name: `${flag} ${r.title}`
-        });
-        console.log(`📜 [${r.lang}] ${srtFile}`);
-        idx++;
-      }
-    } catch (err) {
-      console.log(`⚠️ Napaka pri prenosu #${idx}:`, err.message);
-    }
-  }
-
-  cache[imdbId] = { timestamp: Date.now(), data: subtitles };
-  saveCache(cache);
-  res.json({ subtitles });
-});
-
-app.get("/files
