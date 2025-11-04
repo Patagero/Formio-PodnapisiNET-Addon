@@ -13,8 +13,8 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.1.0", // Posodobljena verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Robustno Iskanje)",
+  version: "8.2.0", // Posodobljena verzija
+  name: "Formio Podnapisi.NET 🇸🇮 (Stabilno)",
   description: "Išče slovenske podnapise z razširjenim filtrom in podrobnim logom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
@@ -26,7 +26,7 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const CACHE_FILE = path.join(TMP_DIR, "cache.json");
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
-const USERNAME = "patagero"; // POZOR: To ni varna praksa za produkcijo!
+const USERNAME = "patagero";
 const PASSWORD = "Formio1978"; 
 
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -84,7 +84,6 @@ async function ensureLoggedIn(page) {
   }
 
   console.log("🔐 Prijavljam se v podnapisi.net ...");
-  // Uporaba 'domcontentloaded' je hitrejša in pogosto zadostuje
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 90000 }); 
 
   try {
@@ -94,14 +93,13 @@ async function ensureLoggedIn(page) {
 
     const loginBtn = await page.waitForSelector("form button[type='submit'], form input[type='submit']", { timeout: 10000 });
     
-    // Čaka na uspešno navigacijo po kliku
     const [response] = await Promise.all([
         page.waitForNavigation({ waitUntil: "networkidle0", timeout: 60000 }),
         loginBtn.click(),
     ]);
 
     const finalUrl = response ? response.url() : await page.url();
-    if (finalUrl.includes("myprofile") || finalUrl === "https://www.podnapisi.net/sl/") {
+    if (finalUrl.includes("myprofile") || finalUrl.includes("user/myprofile") || finalUrl === "https://www.podnapisi.net/sl/") {
         console.log("✅ Prijava uspešna in potrjena z navigacijo.");
     } else {
         console.log("⚠️ Prijava ni potrjena z URL-jem. Preverjanje vsebine...");
@@ -138,7 +136,6 @@ async function getTitleAndYear(imdbId) {
 
 async function fetchSubtitlesForLang(browser, title, langCode) {
   const page = await browser.newPage();
-  // Uporabi "domcontentloaded" za hitrejše nalaganje
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${langCode}`;
   console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
 
@@ -146,31 +143,36 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
 
   let results = [];
   try {
-    // Manj specifični selektorji za večjo zanesljivost
     results = await page.$$eval("table.table tbody tr", (rows) =>
       rows.map((row) => {
-        const linkElement = row.querySelector("a[href*='/download']");
-        const titleElement = linkElement || row.querySelector("a[href*='/subtitles/']");
+        // Link za prenos (download)
+        const downloadLink = row.querySelector("a[href*='/download']");
         
-        const link = linkElement ? "https://www.podnapisi.net" + linkElement.getAttribute('href') : null;
+        // Link s podrobnostmi (ki običajno vsebuje naslov in je v prvem stebru)
+        const titleElement = row.querySelector("td:nth-child(1) a[href*='/subtitles/']");
+
+        const link = downloadLink ? "https://www.podnapisi.net" + downloadLink.getAttribute('href') : null;
+        
+        // POSODOBITEV: Uporabimo naslov iz titleElement, sicer 'Neznan', a ga filtriramo pozneje
         const title = titleElement?.innerText?.trim() || "Neznan";
         
-        return link ? { link, title } : null;
+        return link && title !== "Neznan" ? { link, title } : null; 
       }).filter(Boolean)
     );
   } catch (e) {
     console.warn(`⚠️ Napaka pri evaluaciji: ${e.message}. Poskus z regexom.`);
     const html = await page.content();
-    const regex = /href="(\/subtitles\/[^\/]+\/download)"[^>]*>([^<]+)<\/a>/g;
+    // Regex, ki zajame link za download in naslov podnapisa
+    const regex = /<a href="(\/subtitles\/[^\/]+\/download)"[^>]*>\s*(.*?)\s*<\/a>/g;
     let match;
     while ((match = regex.exec(html)) !== null) {
       const link = "https://www.podnapisi.net" + match[1];
       const title = match[2].trim();
-      results.push({ link, title });
+      if (title) results.push({ link, title });
     }
   }
   
-  await page.close(); // ZELO POMEMBNO: Zapri stran za prihranek RAM-a
+  await page.close(); 
 
   console.log(`✅ Najdenih ${results.length} (${langCode})`);
   return results.map((r, i) => ({ ...r, lang: langCode, index: i + 1 }));
@@ -209,10 +211,16 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
   // 3. 🧠 IZBOLJŠAN IN TOLERANTEN FILTER
-  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
-  const cleanYear = (year || "").replace(/\D+/g, "");
 
-  // Razdeli naslov na ključne besede (izloči kratke besede za večjo toleranco)
+  // Določi, ali naj se letnica uporabi v filtru (ignoriraj prihodnje letnice)
+  const currentYear = new Date().getFullYear();
+  const targetYear = parseInt(year);
+  const useYearFilter = targetYear && targetYear <= currentYear;
+  
+  const cleanYear = useYearFilter ? (year || "").replace(/\D+/g, "") : ""; 
+  
+  // Bolj tolerantno čiščenje naslova za ključne besede
+  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
   const titleKeywords = cleanTitle.split(/\s+/).filter(w => w.length > 2); 
 
   const filteredResults = slResults.filter(r => {
@@ -221,30 +229,28 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     // 1. Preverjanje ujemanja ključnih besed (VSE morajo biti prisotne)
     const keywordsMatch = titleKeywords.every(keyword => t.includes(keyword));
     
-    // 2. Preverjanje ujemanja letnice (zelo pomembno, če je letnica znana)
+    // 2. Preverjanje ujemanja letnice (deluje le, če je letnica veljavna)
     const yearOk = cleanYear ? t.includes(cleanYear) : true;
     
     // 3. Izločanje napačnih tipov/formatov
     const isWrongFormat = 
-        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t) && !t.includes(cleanYear)) || // Film, ki izgleda kot serija in ima napačno letnico
-        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); // Serija, ki ne vsebuje S/E oznake
+        // Film, ki izgleda kot serija in (če filtriramo po letnici) se letnica ne ujema.
+        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t) && useYearFilter && !t.includes(cleanYear)) || 
+        // Serija, ki ne vsebuje S/E oznake, čeprav bi morala.
+        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
 
-    const isFalsePositive = t.includes("anime") || t.includes("documentary"); // Previdnost
-    
     // LOGIRANJE IZLOČITEV
     if (!keywordsMatch) console.log(`🚫 Izločen (manjka ključna beseda): ${r.title}`);
-    if (cleanYear && !yearOk) console.log(`🚫 Izločen (napačna letnica ${cleanYear}): ${r.title}`);
+    if (useYearFilter && !yearOk) console.log(`🚫 Izločen (napačna letnica ${cleanYear}): ${r.title}`);
     if (isWrongFormat) console.log(`🚫 Izločen (napačen format film/serija): ${r.title}`);
-    if (isFalsePositive) console.log(`🚫 Izločen (lažen pozitiv - tip v naslovu): ${r.title}`);
 
-    return keywordsMatch && yearOk && !isWrongFormat && !isFalsePositive;
+    return keywordsMatch && yearOk && !isWrongFormat; 
   });
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
 
   if (!filteredResults.length) {
     console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
-    // Shranimo prazen rezultat v cache za en dan
     cache[imdbId] = { timestamp: Date.now(), data: [] };
     saveCache(cache);
     return res.json({ subtitles: [] });
@@ -254,12 +260,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const subtitles = [];
   let idx = 1;
 
-  // Dinamičen HOST URL - ZELO POMEMBNO ZA RENDER/HEROKU itd.
   const host = req.protocol + "://" + req.get("host");
 
   for (const r of filteredResults) {
     const downloadLink = r.link;
-    // Ustvari edinstven ID za začasno mapo
     const uniqueId = `${imdbId}_${idx}`;
     const zipPath = path.join(TMP_DIR, `${uniqueId}.zip`);
     const extractDir = path.join(TMP_DIR, uniqueId);
@@ -279,7 +283,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       if (srtFile) {
         subtitles.push({
           id: `formio-podnapisi-${idx}`,
-          // Uporaba dinamičnega URL-ja
           url: `${host}/files/${uniqueId}/${encodeURIComponent(srtFile)}`, 
           lang: r.lang,
           name: `${flag} ${r.title}`
@@ -288,12 +291,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
         idx++;
       }
       
-      // Očisti zip datoteko po ekstrakciji
-      fs.unlinkSync(zipPath);
+      fs.unlinkSync(zipPath); // Počisti ZIP
 
     } catch (err) {
       console.log(`⚠️ Napaka pri prenosu #${idx}:`, err.message);
-      // Poskusi počistiti mapo, tudi če je prišlo do napake
       if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
       if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
     }
@@ -310,7 +311,6 @@ app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   
   if (fs.existsSync(filePath)) {
-    // Pravilna nastavitev Content-Type za SRT
     res.setHeader('Content-Type', 'text/srt; charset=utf-8');
     res.sendFile(filePath);
   }
@@ -325,7 +325,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.1.0)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.2.0)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
