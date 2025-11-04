@@ -12,9 +12,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.4.2",
+  version: "9.4.3",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Zanesljivo iskanje slovenskih podnapisov na podnapisi.net z dinamičnim nalaganjem",
+  description: "Pravilno čakanje na AJAX rezultate (popravek za The Lost Bus ipd.)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -26,7 +26,7 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 let globalBrowser = null;
 
-// 🧠 Zagon Chromium-a
+// 🧠 Zagon Chromium
 async function getBrowser() {
   if (globalBrowser) return globalBrowser;
   const executablePath = await chromium.executablePath();
@@ -61,42 +61,45 @@ async function fetchSubtitles(browser, title) {
   const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
   console.log(`🌍 Iščem 🇸🇮: ${url}`);
 
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
-  // 🔄 Počakaj do 10 sekund, da se rezultati pojavijo (AJAX polling)
-  const start = Date.now();
-  let found = false;
-  while (Date.now() - start < 10000 && !found) {
-    try {
-      const hasResults = await page.$("table.table tbody tr a[href*='/download']");
-      if (hasResults) {
-        found = true;
-        break;
-      }
-    } catch {}
-    await new Promise(r => setTimeout(r, 500));
+  // ⏳ Čakamo do 20 sekund, da se rezultati AJAX naložijo
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll("a[href*='/download']").length > 0,
+      { timeout: 20000 }
+    );
+    console.log("📄 Rezultati AJAX so naloženi.");
+  } catch {
+    console.log("⚠️ Timeout pri čakanju na AJAX rezultate.");
   }
 
   const html = await page.content();
   const results = [];
 
-  // 📋 1. metoda — DOM zajem
+  // 📋 DOM metoda
   try {
-    const domResults = await page.$$eval("table.table tbody tr a[href*='/download']", els =>
-      els.map(a => ({
-        link: a.href,
-        title: a.innerText.trim()
-      }))
+    const domResults = await page.$$eval("a[href*='/download']", els =>
+      els
+        .filter(a => a.innerText.trim().length > 0)
+        .map(a => ({
+          link: a.href.startsWith("http")
+            ? a.href
+            : "https://www.podnapisi.net" + a.getAttribute("href"),
+          title: a.innerText.trim()
+        }))
     );
     results.push(...domResults);
   } catch {}
 
-  // 📋 2. metoda — regex fallback
+  // 📋 Fallback regex metoda
   if (!results.length) {
     const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
     let match;
     while ((match = regex.exec(html)) !== null) {
-      const link = "https://www.podnapisi.net" + match[1];
+      const link = match[1].startsWith("http")
+        ? match[1]
+        : "https://www.podnapisi.net" + match[1];
       const titleTxt = match[2].trim();
       if (titleTxt) results.push({ link, title: titleTxt });
     }
@@ -107,7 +110,7 @@ async function fetchSubtitles(browser, title) {
   return results;
 }
 
-// 🧩 Glavna API pot
+// 🧩 Glavni API endpoint
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
   console.log("==================================================");
@@ -136,14 +139,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 // 📜 Manifest
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// ✅ Keep-alive route
-app.get("/", (req, res) => res.send("Formio Podnapisi.NET 🇸🇮 deluje ✅"));
+// ✅ Keep alive
+app.get("/", (req, res) => res.send("Formio Podnapisi.NET 🇸🇮 – AJAX popravek deluje ✅"));
 
 // 🚀 Zagon strežnika
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 – AJAX polling + fallback fix");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 – AJAX ready verzija (polling 20s)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
   setInterval(() => console.log("💓 Keep-alive ping"), 60000);
