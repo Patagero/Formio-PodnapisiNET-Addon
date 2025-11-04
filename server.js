@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "6.5.0",
+  version: "7.0.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise z napredno filtracijo po naslovu in letnici",
+  description: "Samodejno išče slovenske podnapise z naprednim pametnim filtriranjem",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -105,7 +105,7 @@ async function ensureLoggedIn(page) {
   console.log("💾 Piškotki shranjeni.");
 }
 
-// 🎬 IMDb → naslov (brez letnice)
+// 🎬 IMDb → naslov + letnica
 async function getTitleAndYear(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -175,26 +175,31 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const filteredResults = (() => {
     const cleanTitle = title.toLowerCase();
 
-    // 1️⃣ Najprej iščemo natančne z letnico
-    const withYear = slResults.filter(r => {
+    const notSeries = slResults.filter(r => {
       const n = r.title.toLowerCase();
-      return n.includes(cleanTitle) && year && n.includes(year);
+      return !(n.includes("s0") || n.includes("e0") || n.includes("episode") || n.includes("series") || n.includes("lois"));
     });
 
-    // 2️⃣ Če ni z letnico, obdrži vse z naslovom, a brez serij
+    const withYear = year
+      ? notSeries.filter(r => r.title.toLowerCase().includes(cleanTitle) && r.title.includes(year))
+      : [];
+
     if (withYear.length > 0) return withYear;
 
-    return slResults.filter(r => {
+    const exactTitle = notSeries.filter(r => {
       const n = r.title.toLowerCase();
-      if (n.includes("s0") || n.includes("e0") || n.includes("lois") || n.includes("series")) return false;
-      return n.includes(cleanTitle);
+      return n.startsWith(cleanTitle) || n.includes(`${cleanTitle}.`) || n.includes(`${cleanTitle} `);
     });
+
+    if (exactTitle.length > 0) return exactTitle;
+
+    return notSeries.filter(r => r.title.toLowerCase().includes(cleanTitle));
   })();
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
 
   if (!filteredResults.length) {
-    console.log("❌ Ni bilo najdenih slovenskih podnapisov.");
+    console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
     return res.json({ subtitles: [] });
   }
 
@@ -247,7 +252,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (pametno filtriranje + prijava + cache)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (napredno filtriranje + prijava + cache)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
