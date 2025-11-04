@@ -3,7 +3,6 @@ import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-// ODSTRANJENA sta chromium in puppeteer-core
 import AdmZip from "adm-zip"; 
 
 const app = express();
@@ -12,16 +11,16 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "10.0.0", // Jubilejna verzija za "neverjetno vztrajnost"
-  name: "Formio Podnapisi.NET 🇸🇮 (Direktni Backend Klic)",
-  description: "Išče slovenske podnapise z direktnim HTTP klicem na iskalni backend.",
+  version: "11.0.0", // Vztrajnost!
+  name: "Formio Podnapisi.NET 🇸🇮 (Stealth Fetch)",
+  description: "Iskanje slovenske podnapise z 'lažnimi' HTTP glavami, ki posnemajo starejši brskalnik.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
   idPrefixes: ["tt"]
 };
 
-// --- KONSTANTE ---
+// --- KONSTANTE & CACHE ---
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const CACHE_FILE = path.join(TMP_DIR, "cache.json");
 
@@ -30,7 +29,6 @@ if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, 
 
 const langMap = { sl: "🇸🇮", en: "🇬🇧", hr: "🇭🇷" };
 
-// --- CACHE FUNKCIJE ---
 function loadCache() {
   try { return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); }
   catch { return {}; }
@@ -43,6 +41,7 @@ function saveCache(cache) {
 
 async function getTitleAndYear(imdbId) {
   try {
+    // ... (nespremenjeno)
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
@@ -60,67 +59,59 @@ async function getTitleAndYear(imdbId) {
 }
 
 /**
- * Neposredni klic na iskalni endpoint Podnapisi.NET.
+ * Globalno iskanje z 'lažnimi' glavami za zaobid zaščite.
  */
-async function fetchSubtitlesDirect(title) {
-    // Iskalni URL na zadnji del, ki morda deluje
-    const searchUrl = `https://www.podnapisi.net/sl/search`;
-    console.log(`🌍 Poskušam direktni HTTP klic na: ${searchUrl}`);
+async function fetchSubtitlesStealth(title) {
+    // Iskalni URL, kot da brskamo
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}`;
+    console.log(`🌍 Iščem z lažnimi glavami: ${searchUrl}`);
 
     try {
         const res = await fetch(searchUrl, {
-            method: 'POST', // Pogosto je AJAX iskanje POST
+            method: 'GET',
             headers: {
-                // Posnemanje brskalnika, da ne sproži zaščite
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'X-Requested-With': 'XMLHttpRequest', // Pove, da je to AJAX klic
-            },
-            body: `q=${encodeURIComponent(title)}`
+                // Ta User-Agent je bolj splošen in manj "Chromium bot"
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/100.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'sl,en-US;q=0.7,en;q=0.3',
+                'Cache-Control': 'max-age=0',
+                'Connection': 'keep-alive',
+            }
         });
 
         const html = await res.text();
         
-        // 1. Preverjanje, ali je rezultat prazen (zelo pogosto)
-        if (html.length < 100) {
-             console.log("⚠️ Direktni klic vrnil premalo vsebine, parsanje prekinjeno.");
-             return [];
-        }
-
-        // 2. Parsanje tabele iz HTML-ja, ki ga vrne AJAX
+        // --- IZBOLJŠANO PARSIRANJE HTML-ja z REGEX-om ---
+        // Iščemo link na download, jezik in naslov.
         const results = [];
         
-        // Regex za iskanje vrstic v tabeli. Iščemo link na podnapise in jezik.
-        const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
-        let rowMatch;
-        
-        // Regex za ekstrakcijo podatkov iz vsake vrstice
-        const dataRegex = /href="(\/subtitles\/[^/]+\/download)"[^>]*>[\s\S]*?<span[^>]*rel="(\w{2})"[^>]*>[\s\S]*?<a[^>]*href="\/subtitles\/[^>]*>([\s\S]*?)<\/a>/;
+        // Regex, ki zajame celo vrstico in poskuša iz nje izvleči 3 ključne informacije:
+        // 1. Suffix linka za download (npr. /subtitles/.../download)
+        // 2. Koda jezika (npr. sl, en)
+        // 3. Naslov (zajame celoten link na podnapise)
+        const rowRegex = /href="(\/subtitles\/[^/]+\/download)"[\s\S]*?rel="(\w{2})"[^>]*>[\s\S]*?<a[^>]*href="\/subtitles\/[^>]*>([\s\S]*?)<\/a>/g;
+        let match;
 
-        while ((rowMatch = rowRegex.exec(html)) !== null) {
-            const rowContent = rowMatch[1];
-            const dataMatch = rowContent.match(dataRegex);
+        while ((match = rowRegex.exec(html)) !== null) {
+            const linkSuffix = match[1]; 
+            const lang = match[2];       
+            const title = match[3].replace(/<[^>]*>/g, '').trim(); 
 
-            if (dataMatch) {
-                const linkSuffix = dataMatch[1]; // /subtitles/naslov/download
-                const lang = dataMatch[2];       // sl, en, hr, ...
-                const title = dataMatch[3].replace(/<[^>]*>/g, '').trim(); // Očiščen naslov
-
-                if (lang === 'sl') { // Takoj filtriraj slovenske
-                    results.push({
-                        link: "https://www.podnapisi.net" + linkSuffix,
-                        title: title,
-                        lang: lang
-                    });
-                }
+            // Takoj filtriraj slovenske in preveri, če ima naslov
+            if (lang === 'sl' && title) { 
+                results.push({
+                    link: "https://www.podnapisi.net" + linkSuffix,
+                    title: title,
+                    lang: lang
+                });
             }
         }
         
-        console.log(`✅ Direktni klic uspešen. Slovenski podnapisi najdeni: ${results.length}`);
+        console.log(`✅ Stealth Fetch uspešen. Skupaj najdenih: ${results.length}`);
         return results;
 
     } catch (error) {
-        console.error("❌ Napaka pri direktnem HTTP klicu:", error.message);
+        console.error("❌ Napaka pri Stealth HTTP klicu:", error.message);
         return [];
     }
 }
@@ -131,7 +122,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
-  // 1. CACHE
+  // 1. CACHE (nespremenjeno)
   const cache = loadCache();
   if (cache[imdbId] && Date.now() - cache[imdbId].timestamp < 24 * 60 * 60 * 1000) {
     console.log("⚡ Rezultat iz cache-a");
@@ -145,10 +136,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  // Iskanje z direktnim fetch klicem
-  const slResults = await fetchSubtitlesDirect(title);
+  // Iskanje z direktnim fetch klicem in stealth glavami
+  const slResults = await fetchSubtitlesStealth(title);
   
-  // 3. 🧠 FILTER (ostane robusten)
+  // 3. 🧠 FILTER (nespremenjeno)
   
   const currentYear = new Date().getFullYear();
   const targetYear = parseInt(year);
@@ -191,13 +182,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: [] });
   }
   
-  // 4. PRENOS IN EKSTRAKCIJA
+  // 4. PRENOS IN EKSTRAKCIJA (nespremenjeno)
   const subtitles = [];
   let idx = 1;
 
   const host = req.protocol + "://" + req.get("host");
 
   for (const r of filteredResults) {
+    // ... (nespremenjeno)
     const downloadLink = r.link;
     const uniqueId = `${imdbId}_${idx}`;
     const zipPath = path.join(TMP_DIR, `${uniqueId}.zip`);
@@ -264,8 +256,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V10.0.0)");
-  console.log("🔥 ULTIMATIVNI POSKUS: Direktni backend HTTP klic.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V11.0.0)");
+  console.log("🔥 Vztrajnost! Sedaj uporabljamo Stealth Fetch z 'lažnimi' glavami.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
