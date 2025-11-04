@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "6.4.0",
+  version: "6.5.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče samo slovenske podnapise z napredno filtracijo po letnici in naslovu",
+  description: "Samodejno išče slovenske podnapise z napredno filtracijo po naslovu in letnici",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -171,16 +171,25 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🎯 Filtracija po naslovu in letnici
-  const filteredResults = slResults.filter(r => {
-    const name = r.title.toLowerCase();
+  // 🎯 Pametno filtriranje
+  const filteredResults = (() => {
     const cleanTitle = title.toLowerCase();
 
-    if (name.includes("s0") || name.includes("e0") || name.includes("lois") || name.includes("series")) return false;
-    if (year && !name.includes(year)) return false;
+    // 1️⃣ Najprej iščemo natančne z letnico
+    const withYear = slResults.filter(r => {
+      const n = r.title.toLowerCase();
+      return n.includes(cleanTitle) && year && n.includes(year);
+    });
 
-    return name.includes(cleanTitle);
-  });
+    // 2️⃣ Če ni z letnico, obdrži vse z naslovom, a brez serij
+    if (withYear.length > 0) return withYear;
+
+    return slResults.filter(r => {
+      const n = r.title.toLowerCase();
+      if (n.includes("s0") || n.includes("e0") || n.includes("lois") || n.includes("series")) return false;
+      return n.includes(cleanTitle);
+    });
+  })();
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
 
@@ -238,7 +247,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (filtracija po letnici in naslovu)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (pametno filtriranje + prijava + cache)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
