@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.1.0",
+  version: "7.2.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Samodejno išče slovenske podnapise z naprednim pametnim ujemanjem (fuzzy filter)",
+  description: "Samodejno išče slovenske podnapise z naprednim pametnim ujemanjem (fuzzy filter v2)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -171,16 +171,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🎯 Fuzzy filtriranje
+  // 🎯 Fuzzy filtriranje z večjo toleranco in debugom
   const filteredResults = (() => {
     const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
-
     const notSeries = slResults.filter(r => {
       const n = r.title.toLowerCase();
       return !(n.includes("s0") || n.includes("e0") || n.includes("episode") || n.includes("series") || n.includes("lois"));
     });
 
-    // 🔹 Fuzzy primerjava
     function similar(a, b) {
       a = a.toLowerCase().replace(/[^a-z0-9]+/g, "");
       b = b.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -188,8 +186,11 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       const len = Math.min(a.length, b.length);
       for (let i = 0; i < len; i++) if (a[i] !== b[i]) mismatches++;
       mismatches += Math.abs(a.length - b.length);
-      return mismatches <= 3;
+      return mismatches <= 6; // povečano
     }
+
+    console.log("🔍 Naslov IMDb:", cleanTitle);
+    for (const r of notSeries) console.log("   ↳ preverjam:", r.title);
 
     const withYear = year
       ? notSeries.filter(r => similar(r.title, cleanTitle) && r.title.includes(year))
@@ -259,7 +260,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (fuzzy filter + prijava + cache)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (fuzzy filter v2 + prijava + cache)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
