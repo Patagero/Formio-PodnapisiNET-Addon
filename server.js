@@ -3,7 +3,6 @@ import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-// Odstranjena sta chromium in puppeteer-core, ker ne delujeta
 import AdmZip from "adm-zip"; 
 
 const app = express();
@@ -12,9 +11,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.4.0", // Posodobljena verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Google Search)",
-  description: "Išče slovenske podnapise preko Google iskalnika za obvod blokade in filtrira po nazivu.",
+  version: "8.5.0", // Posodobljena verzija
+  name: "Formio Podnapisi.NET 🇸🇮 (Ultra Stabilno)",
+  description: "Išče slovenske podnapise preko Google iskalnika z agresivnim parsanjem in filtrira po nazivu.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -24,10 +23,6 @@ const manifest = {
 // --- KONSTANTE ---
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const CACHE_FILE = path.join(TMP_DIR, "cache.json");
-// Odstranjena prijavna logika
-// const LOGIN_URL = "https://www.podnapisi.net/sl/login"; 
-// const USERNAME = "patagero"; 
-// const PASSWORD = "Formio1978"; 
 
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
@@ -47,8 +42,6 @@ function saveCache(cache) {
 
 async function getTitleAndYear(imdbId) {
   try {
-    // API Key 'thewdb' je neveljaven za resno uporabo. Tukaj sem ga pustil, ampak
-    // za produkcijo priporočam pridobitev lastnega OMDB API ključa.
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
@@ -57,13 +50,12 @@ async function getTitleAndYear(imdbId) {
           title: data.Title.trim(), 
           year: data.Year || "", 
           type: data.Type || "movie",
-          plot: data.Plot || "" // Za morebitno poznejšo uporabo v filtru
       };
     }
   } catch {
     console.log("⚠️ Napaka IMDb API");
   }
-  return { title: imdbId, year: "", type: "movie", plot: "" };
+  return { title: imdbId, year: "", type: "movie" };
 }
 
 /**
@@ -72,45 +64,44 @@ async function getTitleAndYear(imdbId) {
  */
 async function fetchSubtitlesViaGoogle(title, year) {
     const searchKeywords = `site:podnapisi.net/sl/podnapisi/ ${title} ${year || ""}`;
-    // Uporaba google.com/search in iskanje po elementih 'a[href]'
     const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchKeywords)}`;
     console.log(`🌍 Iščem preko Googla: ${googleSearchUrl}`);
 
     try {
         const res = await fetch(googleSearchUrl, {
-            // Predstavljamo se kot standardni brskalnik, da ne dobimo CAPTCHA ali blokade
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         const html = await res.text();
         
-        // Regex za iskanje URL-jev, ki se ujemajo z vzorcem Podnapisi.NET v Googlovih rezultatih.
-        // Iščemo linke na podnapisi.net/sl/podnapisi/{naslov}
-        const regex = /<a href="(\/url\?q=https:\/\/www\.podnapisi\.net\/sl\/podnapisi\/[^&]+)"[^>]*>(.*?)<\/a>/g;
+        // POSODOBITEV REGEXA: Iščemo širši nabor URL-jev na podnapisi.net
+        const regex = /<a href="(\/url\?q=https:\/\/www\.podnapisi\.net\/[^&]+)"[^>]*>(.*?)<\/a>/g;
         let match;
         const results = [];
 
         while ((match = regex.exec(html)) !== null) {
-            // match[1] je Googlov preusmeritveni URL, ki ga moramo počistiti
             const googleUrl = match[1];
-            // Dekodiramo in dobimo čisti podnapisi.net URL
+            
+            // Dekodiramo in preverimo, če je to link s podnapisi
             const finalUrlMatch = decodeURIComponent(googleUrl).match(/url\?q=(https:\/\/www\.podnapisi\.net\/sl\/podnapisi\/[^\s&]+)/);
 
             if (finalUrlMatch) {
                 const podnapisiUrl = finalUrlMatch[1];
-                // Naslov iz Googlovih rezultatov (match[2])
+                
+                // Preprečimo dodajanje ponavljajočih se rezultatov
+                if (results.some(r => r.url === podnapisiUrl)) continue;
+
+                // Čiščenje naslova iz Googlovih rezultatov (match[2])
                 const titleMatch = match[2].replace(/<[^>]*>/g, '').trim(); 
                 
                 // Pretvorimo URL s podrobnostmi v URL za prenos (download)
-                // Ker gre za URL-je s podrobnostmi: https://www.podnapisi.net/sl/podnapisi/naslov-podnapisa
-                // Dodamo '/download' na konec
                 const downloadLink = podnapisiUrl.replace(/\/$/, "") + '/download';
                 
                 results.push({ 
                     link: downloadLink, 
                     title: titleMatch,
-                    url: podnapisiUrl // URL za lažje debuggiranje
+                    url: podnapisiUrl 
                 });
             }
         }
@@ -144,26 +135,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  // Iskanje preko Googla!
   const slResults = await fetchSubtitlesViaGoogle(title, year);
   
   // 3. 🧠 FILTER: Manj agresiven, osredotočen na ključne besede
   
-  // Bolj tolerantno čiščenje naslova za ključne besede
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
   const titleKeywords = cleanTitle.split(/\s+/).filter(w => w.length > 2); 
 
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     
-    // 1. Preverjanje ujemanja ključnih besed (vsaj polovica mora biti prisotna, ali celotno ime)
+    // 1. Ujemanje: Vsaj polovica ključnih besed ali celoten čisti naslov
     const keywordsMatchCount = titleKeywords.filter(keyword => t.includes(keyword)).length;
     const keywordsMatch = keywordsMatchCount >= Math.ceil(titleKeywords.length / 2) || t.includes(cleanTitle.replace(/\s/g, ''));
     
     // 2. Izločanje serijskih/napačnih formatov
     const isWrongFormat = 
-        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || 
-        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
+        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || // Film ne sme vsebovati S/E
+        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); // Serija mora vsebovati S/E
 
     // LOGIRANJE IZLOČITEV
     if (!keywordsMatch) console.log(`🚫 Izločen (ne ustreza ključnim besedam): ${r.title}`);
@@ -195,7 +184,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const flag = langMap.sl || "🌐";
 
     try {
-      // Potrebno je dodati User-Agent tudi pri prenosu, sicer Podnapisi.NET lahko blokira
       const zipRes = await fetch(downloadLink, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; FormioSubtitles/1.0)'
@@ -255,8 +243,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.4.0)");
-  console.log("🌐 Sedaj iščemo preko Google Bypass metode.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.5.0)");
+  console.log("🌐 Sedaj iščemo z najagresivnejšim Google parserjem.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
