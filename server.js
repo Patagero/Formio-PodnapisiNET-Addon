@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.3.0",
+  version: "7.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče slovenske podnapise s prijavo, cache in preciznim filtrom (brez 'Saints and Sinners')",
+  description: "Išče slovenske podnapise s prijavo, cache in pametnim filtrom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -68,35 +68,19 @@ async function ensureLoggedIn(page) {
   await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise(r => setTimeout(r, 4000));
 
-  const bodyText = await page.evaluate(() => document.body.innerText);
-  if (bodyText.includes("Odjava") || bodyText.includes("Moj profil")) {
-    console.log("✅ Uporabnik že prijavljen.");
-    globalCookiesLoaded = true;
-    return;
-  }
-
   try {
     await page.waitForSelector("input[name='username']", { timeout: 30000 });
-  } catch {
-    throw new Error("⚠️ Polje za uporabniško ime se ni pojavilo – morda CAPTCHA.");
-  }
-
-  await page.type("input[name='username']", USERNAME, { delay: 25 });
-  await page.type("input[name='password']", PASSWORD, { delay: 25 });
-
-  const loginBtn = (await page.$("form[action*='login'] button")) ||
-                   (await page.$("form[action*='login'] input[type='submit']"));
-  if (!loginBtn) throw new Error("⚠️ Gumb za prijavo ni bil najden.");
-  await loginBtn.click();
-
-  try {
+    await page.type("input[name='username']", USERNAME, { delay: 25 });
+    await page.type("input[name='password']", PASSWORD, { delay: 25 });
+    const loginBtn = await page.$("form[action*='login'] button") || await page.$("form[action*='login'] input[type='submit']");
+    await loginBtn.click();
     await page.waitForFunction(
       () => document.body.innerText.includes("Odjava") || document.body.innerText.includes("Moj profil"),
       { timeout: 30000 }
     );
     console.log("✅ Prijava uspešna.");
   } catch {
-    console.log("⚠️ Prijava ni potrjena (morda počasno nalaganje).");
+    console.log("⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
   }
 
   const cookies = await page.cookies();
@@ -105,7 +89,6 @@ async function ensureLoggedIn(page) {
   console.log("💾 Piškotki shranjeni.");
 }
 
-// 🎬 IMDb → naslov + letnica
 async function getTitleAndYear(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -145,4 +128,99 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
     while ((match = regex.exec(html)) !== null) {
       const link = "https://www.podnapisi.net" + match[1];
       const title = match[2].trim();
-      results.push({ link
+      results.push({ link, title });
+    }
+  }
+
+  console.log(`✅ Najdenih ${results.length} (${langCode})`);
+  return results.map((r, i) => ({ ...r, lang: langCode, index: i + 1 }));
+}
+
+app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
+  const imdbId = req.params.id;
+  console.log("==================================================");
+  console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
+
+  const cache = loadCache();
+  if (cache[imdbId] && Date.now() - cache[imdbId].timestamp < 24 * 60 * 60 * 1000) {
+    console.log("⚡ Rezultat iz cache-a");
+    return res.json({ subtitles: cache[imdbId].data });
+  }
+
+  const { title, year } = await getTitleAndYear(imdbId);
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await ensureLoggedIn(page);
+
+  const slResults = await fetchSubtitlesForLang(browser, title, "sl");
+
+  // 🎯 Natančen filter – odstrani druge naslove z “sinners”, “saints”, “lois” ipd.
+  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const filteredResults = slResults.filter(r => {
+    const t = r.title.toLowerCase();
+    const normalized = t.replace(/[^a-z0-9]+/g, "");
+    const isMatch = normalized.startsWith(cleanTitle) || normalized.includes(cleanTitle);
+    const isWrong = /(saints|lois|series|episode)/.test(t);
+    return isMatch && !isWrong;
+  });
+
+  console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
+
+  if (!filteredResults.length) {
+    console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
+    return res.json({ subtitles: [] });
+  }
+
+  const subtitles = [];
+  let idx = 1;
+
+  for (const r of filteredResults) {
+    const downloadLink = r.link;
+    const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
+    const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
+    const flag = langMap[r.lang] || "🌐";
+
+    try {
+      const zipRes = await fetch(downloadLink);
+      const buf = Buffer.from(await zipRes.arrayBuffer());
+      fs.writeFileSync(zipPath, buf);
+
+      const zip = new AdmZip(zipPath);
+      zip.extractAllTo(extractDir, true);
+
+      const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
+      if (srtFile) {
+        subtitles.push({
+          id: `formio-podnapisi-${idx}`,
+          url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${idx}/${encodeURIComponent(srtFile)}`,
+          lang: r.lang,
+          name: `${flag} ${r.title}`
+        });
+        console.log(`📜 [${r.lang}] ${srtFile}`);
+        idx++;
+      }
+    } catch (err) {
+      console.log(`⚠️ Napaka pri prenosu #${idx}:`, err.message);
+    }
+  }
+
+  cache[imdbId] = { timestamp: Date.now(), data: subtitles };
+  saveCache(cache);
+  res.json({ subtitles });
+});
+
+app.get("/files/:id/:file", (req, res) => {
+  const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
+  if (fs.existsSync(filePath)) res.sendFile(filePath);
+  else res.status(404).send("Subtitle not found");
+});
+
+app.get("/manifest.json", (req, res) => res.json(manifest));
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("==================================================");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (precizen filter + login + cache)");
+  console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
+  console.log("==================================================");
+});
