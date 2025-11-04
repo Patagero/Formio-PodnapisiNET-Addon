@@ -11,9 +11,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "11.0.0", // Vztrajnost!
-  name: "Formio Podnapisi.NET 🇸🇮 (Stealth Fetch)",
-  description: "Iskanje slovenske podnapise z 'lažnimi' HTTP glavami, ki posnemajo starejši brskalnik.",
+  version: "11.1.0", // Testna verzija - Odstranjen filter!
+  name: "Formio Podnapisi.NET 🇸🇮 (Stealth Fetch, Brez Filtra)",
+  description: "Išče podnapise z 'lažnimi' HTTP glavami in VRNE VSE, kar najde, za testiranje Regexa.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -41,7 +41,6 @@ function saveCache(cache) {
 
 async function getTitleAndYear(imdbId) {
   try {
-    // ... (nespremenjeno)
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
@@ -60,9 +59,9 @@ async function getTitleAndYear(imdbId) {
 
 /**
  * Globalno iskanje z 'lažnimi' glavami za zaobid zaščite.
+ * Vrne VSE, kar najde.
  */
 async function fetchSubtitlesStealth(title) {
-    // Iskalni URL, kot da brskamo
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}`;
     console.log(`🌍 Iščem z lažnimi glavami: ${searchUrl}`);
 
@@ -70,7 +69,6 @@ async function fetchSubtitlesStealth(title) {
         const res = await fetch(searchUrl, {
             method: 'GET',
             headers: {
-                // Ta User-Agent je bolj splošen in manj "Chromium bot"
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/100.0',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'sl,en-US;q=0.7,en;q=0.3',
@@ -81,14 +79,10 @@ async function fetchSubtitlesStealth(title) {
 
         const html = await res.text();
         
-        // --- IZBOLJŠANO PARSIRANJE HTML-ja z REGEX-om ---
-        // Iščemo link na download, jezik in naslov.
+        // --- PARSIRANJE HTML-ja z REGEX-om (brez filtriranja!) ---
         const results = [];
         
-        // Regex, ki zajame celo vrstico in poskuša iz nje izvleči 3 ključne informacije:
-        // 1. Suffix linka za download (npr. /subtitles/.../download)
-        // 2. Koda jezika (npr. sl, en)
-        // 3. Naslov (zajame celoten link na podnapise)
+        // Ta Regex je bil posodobljen, da je bolj toleranten
         const rowRegex = /href="(\/subtitles\/[^/]+\/download)"[\s\S]*?rel="(\w{2})"[^>]*>[\s\S]*?<a[^>]*href="\/subtitles\/[^>]*>([\s\S]*?)<\/a>/g;
         let match;
 
@@ -97,8 +91,8 @@ async function fetchSubtitlesStealth(title) {
             const lang = match[2];       
             const title = match[3].replace(/<[^>]*>/g, '').trim(); 
 
-            // Takoj filtriraj slovenske in preveri, če ima naslov
-            if (lang === 'sl' && title) { 
+            // Vrnemo VSE, kar je Regex ujel, ne glede na jezik!
+            if (title) { 
                 results.push({
                     link: "https://www.podnapisi.net" + linkSuffix,
                     title: title,
@@ -107,7 +101,7 @@ async function fetchSubtitlesStealth(title) {
             }
         }
         
-        console.log(`✅ Stealth Fetch uspešen. Skupaj najdenih: ${results.length}`);
+        console.log(`✅ Stealth Fetch uspešen. Skupaj najdenih (vsi jeziki): ${results.length}`);
         return results;
 
     } catch (error) {
@@ -122,9 +116,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
-  // 1. CACHE (nespremenjeno)
+  // 1. CACHE
   const cache = loadCache();
-  if (cache[imdbId] && Date.now() - cache[imdbId].timestamp < 24 * 60 * 60 * 1000) {
+  if (cache[imdbId] && Date.now() - cache[imdbid].timestamp < 24 * 60 * 60 * 1000) {
     console.log("⚡ Rezultat iz cache-a");
     return res.json({ subtitles: cache[imdbId].data });
   }
@@ -136,60 +130,32 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  // Iskanje z direktnim fetch klicem in stealth glavami
-  const slResults = await fetchSubtitlesStealth(title);
+  // Iskanje z direktnim fetch klicem in stealth glavami (brez filtra!)
+  const allResults = await fetchSubtitlesStealth(title); 
   
-  // 3. 🧠 FILTER (nespremenjeno)
-  
-  const currentYear = new Date().getFullYear();
-  const targetYear = parseInt(year);
-  const useYearFilter = targetYear && targetYear <= currentYear;
-  
-  const cleanYear = useYearFilter ? (year || "").replace(/\D+/g, "") : ""; 
-  
-  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
-  const titleKeywords = cleanTitle.split(/\s+/).filter(w => w.length > 2); 
-
-  const filteredResults = slResults.filter(r => {
-    const t = r.title.toLowerCase();
-    
-    // 1. Ujemanje: Vsaj polovica ključnih besed
-    const keywordsMatchCount = titleKeywords.filter(keyword => t.includes(keyword)).length;
-    const keywordsMatch = keywordsMatchCount >= Math.ceil(titleKeywords.length / 2) || t.includes(cleanTitle.replace(/\s/g, ''));
-    
-    // 2. Preverjanje letnice (če ni prihodnja)
-    const yearOk = cleanYear ? t.includes(cleanYear) : true;
-
-    // 3. Izločanje serijskih/napačnih formatov
-    const isWrongFormat = 
-        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || 
-        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
-
-    // LOGIRANJE IZLOČITEV
-    if (!keywordsMatch) console.log(`🚫 Izločen (klj. besede): ${r.title}`);
-    if (useYearFilter && !yearOk) console.log(`🚫 Izločen (napačna letnica ${cleanYear}): ${r.title}`);
-    if (isWrongFormat) console.log(`🚫 Izločen (napačen format film/serija): ${r.title}`);
-
-    return keywordsMatch && yearOk && !isWrongFormat; 
-  });
-
-  console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
-
-  if (!filteredResults.length) {
-    console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
+  // Če nismo nič našli, se ustavi.
+  if (!allResults.length) {
+    console.log(`❌ Ni bilo najdenih podnapisov (tudi v drugih jezikih) za ${title}`);
     cache[imdbId] = { timestamp: Date.now(), data: [] };
     saveCache(cache);
     return res.json({ subtitles: [] });
   }
   
-  // 4. PRENOS IN EKSTRAKCIJA (nespremenjeno)
+  // 3. 🧠 FILTRA NI! VRNEMO VSE, KAR SMO NAŠLI, AMPAK SAMO SLOVENSKE ZA ZADNJO FAZO
+  
+  // Tukaj ponovno filtriramo samo SLO, ker jih ne bomo nalagali vseh
+  const filteredResults = allResults.filter(r => r.lang === 'sl');
+
+  console.log(`🧩 Skupaj smo našli: ${allResults.length} rezultatov. Naložimo le ${filteredResults.length} slovenskih.`);
+
+
+  // 4. PRENOS IN EKSTRAKCIJA SLOVENSKIH PODNAPISOV
   const subtitles = [];
   let idx = 1;
 
   const host = req.protocol + "://" + req.get("host");
 
   for (const r of filteredResults) {
-    // ... (nespremenjeno)
     const downloadLink = r.link;
     const uniqueId = `${imdbId}_${idx}`;
     const zipPath = path.join(TMP_DIR, `${uniqueId}.zip`);
@@ -197,6 +163,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const flag = langMap.sl || "🌐";
 
     try {
+      // Ostanemo pri 'FormioSubtitles' kot User-Agentu za prenos ZIP datoteke
       const zipRes = await fetch(downloadLink, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; FormioSubtitles/1.0)'
@@ -256,8 +223,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V11.0.0)");
-  console.log("🔥 Vztrajnost! Sedaj uporabljamo Stealth Fetch z 'lažnimi' glavami.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V11.1.0)");
+  console.log("🔥 TESTIRANJE: Odstranili smo filter za jezik/naslov. Parsanje mora zdaj delati.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
