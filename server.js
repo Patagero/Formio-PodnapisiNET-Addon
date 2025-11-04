@@ -13,10 +13,10 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.1.0",
+  version: "9.3.0",
   name: "Formio Podnapisi.NET 🇸🇮",
   description:
-    "Išče slovenske podnapise s takojšnjim odgovorom in fallback regex sistemom (hitro delovanje brez prijave)",
+    "Iskanje slovenskih podnapisov z instant dummy odzivom, cache in podporo novemu 'card' layoutu na podnapisi.net",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -43,14 +43,12 @@ function saveCache(cache) {
 }
 
 let globalBrowser = null;
-
 async function getBrowser() {
   if (globalBrowser) return globalBrowser;
   const executablePath =
     (await chromium.executablePath()) ||
     puppeteer.executablePath?.() ||
     "/usr/bin/chromium-browser";
-
   globalBrowser = await puppeteer.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-dev-shm-usage"],
     executablePath,
@@ -77,7 +75,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔍 Pridobi slovenske podnapise (API + regex fallback)
+// 🔍 Pridobi slovenske podnapise (API + nov card layout + regex fallback)
 async function fetchSubtitles(browser, title) {
   const page = await browser.newPage();
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
@@ -96,42 +94,59 @@ async function fetchSubtitles(browser, title) {
 
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  for (let i = 0; i < 30 && !ajax; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  // počakaj max 10 s na API odgovor
+  for (let i = 0; i < 20 && !ajax; i++) await new Promise((r) => setTimeout(r, 500));
 
-  if (!ajax?.subtitles?.length) {
-    const html = await page.content();
-    const results = [];
-    const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      const link = "https://www.podnapisi.net" + match[1];
-      const subTitle = match[2].trim();
-      if (subTitle) results.push({ link, title: subTitle });
-    }
-    await page.close();
+  let results = [];
 
-    if (!results.length) {
-      console.log("⚠️ Ni slovenskih rezultatov (niti po regexu)");
-      return [];
-    }
-
-    console.log(`✅ Najdenih ${results.length} 🇸🇮 (regex fallback)`);
-    return results.map((r, i) => ({
-      link: r.link,
-      title: r.title,
+  if (ajax?.subtitles?.length) {
+    console.log(`✅ Najdenih ${ajax.subtitles.length} 🇸🇮 (API način)`);
+    results = ajax.subtitles.map((s, i) => ({
+      link: "https://www.podnapisi.net" + s.url,
+      title: s.release || s.title || "Neznan",
       index: i + 1,
     }));
+  } else {
+    const html = await page.content();
+
+    // tabela
+    results = await page.$$eval("table.table tbody tr a[href*='/download']", (links) =>
+      links.map((a, i) => ({
+        link: a.href,
+        title: a.innerText.trim(),
+        index: i + 1,
+      }))
+    );
+
+    // nov card layout
+    if (!results.length) {
+      results = await page.$$eval("div.subtitle-card a[href*='/download']", (links) =>
+        links.map((a, i) => ({
+          link: a.href,
+          title: a.innerText.trim(),
+          index: i + 1,
+        }))
+      );
+    }
+
+    // regex fallback
+    if (!results.length) {
+      const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        const link = "https://www.podnapisi.net" + match[1];
+        const subTitle = match[2].trim();
+        if (subTitle) results.push({ link, title: subTitle });
+      }
+    }
+
+    if (results.length)
+      console.log(`✅ Najdenih ${results.length} 🇸🇮 (HTML/regex način)`);
+    else console.log("⚠️ Ni slovenskih rezultatov (po vseh metodah)");
   }
 
   await page.close();
-  console.log(`✅ Najdenih ${ajax.subtitles.length} 🇸🇮 (API način)`);
-  return ajax.subtitles.map((s, i) => ({
-    link: "https://www.podnapisi.net" + s.url,
-    title: s.release || s.title || "Neznan",
-    index: i + 1,
-  }));
+  return results;
 }
 
 // 🚀 Glavna pot
@@ -143,7 +158,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const cache = loadCache();
   const cached = cache[imdbId];
 
-  // ⚡ Takojšnji dummy odgovor za Stremio
+  // ⚡ Takojšnji dummy odgovor
   res.json({
     subtitles: cached?.data?.length
       ? cached.data
@@ -185,7 +200,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   })();
 });
 
-// 🧹 Samodejno čiščenje tmp
+// 🧹 Auto cleanup
 setInterval(() => {
   const files = fs.readdirSync(TMP_DIR);
   const now = Date.now();
@@ -203,7 +218,9 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 – instant dummy + AJAX/regex fallback + cache");
+  console.log(
+    "✅ Formio Podnapisi.NET 🇸🇮 – instant dummy + API/card/regex fallback + cache + cleanup"
+  );
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
