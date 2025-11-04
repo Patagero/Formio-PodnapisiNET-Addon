@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.7.1",
+  version: "8.0.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče slovenske podnapise z inteligentnim filtrom in cache sistemom",
+  description: "Išče slovenske podnapise z razširjenim filtrom in podrobnim logom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -154,7 +154,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🎯 Inteligenten filter: ohrani prave release naslove
+  // 🧠 Razširjen filter – tolerantno ujemanje
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const cleanYear = (year || "").replace(/\D+/g, "");
 
@@ -162,14 +162,19 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     const t = r.title.toLowerCase();
     const normalized = t.replace(/[^a-z0-9]+/g, "");
 
-    const matchTitle =
+    const titleOk =
       normalized.includes(cleanTitle) ||
       normalized.startsWith(cleanTitle) ||
       normalized.includes(cleanTitle + cleanYear) ||
-      (cleanYear && normalized.includes(cleanYear) && normalized.includes(cleanTitle.slice(0, 5)));
+      (cleanYear && normalized.includes(cleanYear) && normalized.includes(cleanTitle.slice(0, 4)));
 
-    const isWrong = /(saints|lois|supergirl|series|season|episode)/.test(t);
-    return matchTitle && !isWrong;
+    const has2025 = cleanYear ? normalized.includes(cleanYear) : true;
+    const isWrong = /(saints|lois|supergirl|series|season|episode|batman)/.test(t);
+
+    if (!titleOk) console.log(`🚫 Izločen (ni ujemanja): ${r.title}`);
+    if (isWrong) console.log(`🚫 Izločen (napačen): ${r.title}`);
+
+    return titleOk && !isWrong && has2025;
   });
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
@@ -228,7 +233,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (inteligenten filter + prijava + cache)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (razširjen filter + prijava + log izločitev)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
