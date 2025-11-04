@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.6.3",
+  version: "7.7.1",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče samo slovenske podnapise z ohlapnim filtrom in cache sistemom",
+  description: "Išče slovenske podnapise z inteligentnim filtrom in cache sistemom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -154,21 +154,22 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🧠 Popravljena verzija filtra (ohlapna, prepozna 2025 variante)
+  // 🎯 Inteligenten filter: ohrani prave release naslove
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const cleanYear = (year || "").replace(/\D+/g, "");
+
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     const normalized = t.replace(/[^a-z0-9]+/g, "");
 
-    const looseMatch =
+    const matchTitle =
       normalized.includes(cleanTitle) ||
+      normalized.startsWith(cleanTitle) ||
       normalized.includes(cleanTitle + cleanYear) ||
-      normalized.includes(cleanTitle.slice(0, 6)) ||
-      (cleanYear && normalized.includes(cleanYear));
+      (cleanYear && normalized.includes(cleanYear) && normalized.includes(cleanTitle.slice(0, 5)));
 
-    const isWrong = /(lois|supergirl|saints|series|season|episode)/.test(t);
-    return looseMatch && !isWrong;
+    const isWrong = /(saints|lois|supergirl|series|season|episode)/.test(t);
+    return matchTitle && !isWrong;
   });
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
@@ -227,7 +228,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (ohlapen filter + cache + prijava)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (inteligenten filter + prijava + cache)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
