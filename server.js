@@ -3,9 +3,8 @@ import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
-import AdmZip from "adm-zip";
+// ODSTRANJENA sta chromium in puppeteer-core
+import AdmZip from "adm-zip"; 
 
 const app = express();
 app.use(cors());
@@ -13,9 +12,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.1.0", // Posodobljena verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Ultra-Tolerant Parse)",
-  description: "Iskanje brez prijave, najde vse podnapise z najbolj tolerantnim parsanjem HTML.",
+  version: "10.0.0", // Jubilejna verzija za "neverjetno vztrajnost"
+  name: "Formio Podnapisi.NET 🇸🇮 (Direktni Backend Klic)",
+  description: "Išče slovenske podnapise z direktnim HTTP klicem na iskalni backend.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -40,31 +39,7 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 }
 
-// --- PUPPETEER/CHROMIUM ---
-let globalBrowser = null;
-
-async function getBrowser() {
-  if (globalBrowser) return globalBrowser;
-  
-  const launchOptions = {
-    args: [...chromium.args, "--no-sandbox", "--disable-dev-shm-usage", "--single-process"],
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-    timeout: 60000,
-  };
-
-  try {
-    console.log("🚀 Zagon brskalnika Chromium...");
-    globalBrowser = await puppeteer.launch(launchOptions);
-    console.log("✅ Brskalnik uspešno zagnan.");
-    return globalBrowser;
-  } catch (error) {
-    console.error("❌ Napaka pri zagonu brskalnika:", error.message);
-    if (globalBrowser) await globalBrowser.close();
-    globalBrowser = null;
-    throw new Error("Napaka pri zagonu Puppeteerja. (Morda RAM/CPU omejitev)");
-  }
-}
+// --- POMOŽNE FUNKCIJE ---
 
 async function getTitleAndYear(imdbId) {
   try {
@@ -85,69 +60,69 @@ async function getTitleAndYear(imdbId) {
 }
 
 /**
- * Globalno iskanje vseh podnapisov brez omejitve na jezik in ultra-tolerantno parsanje.
+ * Neposredni klic na iskalni endpoint Podnapisi.NET.
  */
-async function fetchSubtitlesForAllLangs(browser, title) {
-  const page = await browser.newPage();
-  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}`;
-  console.log(`🌍 Iščem globalno (vsi jeziki): ${searchUrl}`);
+async function fetchSubtitlesDirect(title) {
+    // Iskalni URL na zadnji del, ki morda deluje
+    const searchUrl = `https://www.podnapisi.net/sl/search`;
+    console.log(`🌍 Poskušam direktni HTTP klic na: ${searchUrl}`);
 
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  
-  try {
-     await page.waitForSelector("table.table tbody tr", { timeout: 15000 });
-     console.log("✅ Iskalna tabela najdena. Parsam rezultate z ultra-toleranco...");
-  } catch (e) {
-     console.log("⚠️ Iskalna tabela podnapisov ni bila najdena v 15 sekundah (blokada/prazno).");
-     await page.close();
-     return [];
-  }
+    try {
+        const res = await fetch(searchUrl, {
+            method: 'POST', // Pogosto je AJAX iskanje POST
+            headers: {
+                // Posnemanje brskalnika, da ne sproži zaščite
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest', // Pove, da je to AJAX klic
+            },
+            body: `q=${encodeURIComponent(title)}`
+        });
 
-  let results = [];
-  try {
-    results = await page.$$eval("table", (tables) => {
-        // Združi vse vrstice iz vseh tabel na strani
-        const rows = tables.flatMap(table => Array.from(table.querySelectorAll("tbody tr")));
+        const html = await res.text();
         
-        return rows.map((row) => {
-            // 1. Link za prenos (najbolj zanesljiv element)
-            const downloadLink = row.querySelector("a[href*='/download']");
-            
-            // 2. Naslov (iščemo v kateremkoli linku v prvi celici)
-            const titleElement = row.querySelector("td:nth-child(1) a"); 
-            
-            // 3. Jezik (iščemo v kateremkoli 'span' z rel atributom ali v celici za jezik)
-            const langElement = row.querySelector("span[rel], td.language span"); 
-            
-            const link = downloadLink ? "https://www.podnapisi.net" + downloadLink.getAttribute('href') : null;
-            const title = titleElement?.innerText?.trim() || "Neznan";
-            
-            // Poskus ekstrakcije jezika
-            let lang = "unknown";
-            if (langElement) {
-                // Poskusi iz rel="koda"
-                lang = langElement.getAttribute('rel') || "unknown"; 
-                // Poskusi iz title atributa, če je tam koda (sl, en, ...)
-                if (lang === "unknown" && langElement.title) {
-                    lang = langElement.title.toLowerCase().slice(0, 2);
+        // 1. Preverjanje, ali je rezultat prazen (zelo pogosto)
+        if (html.length < 100) {
+             console.log("⚠️ Direktni klic vrnil premalo vsebine, parsanje prekinjeno.");
+             return [];
+        }
+
+        // 2. Parsanje tabele iz HTML-ja, ki ga vrne AJAX
+        const results = [];
+        
+        // Regex za iskanje vrstic v tabeli. Iščemo link na podnapise in jezik.
+        const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
+        let rowMatch;
+        
+        // Regex za ekstrakcijo podatkov iz vsake vrstice
+        const dataRegex = /href="(\/subtitles\/[^/]+\/download)"[^>]*>[\s\S]*?<span[^>]*rel="(\w{2})"[^>]*>[\s\S]*?<a[^>]*href="\/subtitles\/[^>]*>([\s\S]*?)<\/a>/;
+
+        while ((rowMatch = rowRegex.exec(html)) !== null) {
+            const rowContent = rowMatch[1];
+            const dataMatch = rowContent.match(dataRegex);
+
+            if (dataMatch) {
+                const linkSuffix = dataMatch[1]; // /subtitles/naslov/download
+                const lang = dataMatch[2];       // sl, en, hr, ...
+                const title = dataMatch[3].replace(/<[^>]*>/g, '').trim(); // Očiščen naslov
+
+                if (lang === 'sl') { // Takoj filtriraj slovenske
+                    results.push({
+                        link: "https://www.podnapisi.net" + linkSuffix,
+                        title: title,
+                        lang: lang
+                    });
                 }
             }
-            
-            // Samo popolni zadetki gredo naprej
-            return link && title !== "Neznan" && lang.length === 2 ? { link, title, lang } : null; 
-        }).filter(Boolean);
-    });
-  } catch (e) {
-    console.error(`❌ Kritična napaka pri evalvaciji/parsiranju rezultatov: ${e.message}`);
-    await page.close();
-    return [];
-  }
-  
-  await page.close(); 
+        }
+        
+        console.log(`✅ Direktni klic uspešen. Slovenski podnapisi najdeni: ${results.length}`);
+        return results;
 
-  const slResults = results.filter(r => r.lang === 'sl');
-  console.log(`✅ Najdenih skupaj: ${results.length}. Slovenski: ${slResults.length}`);
-  return slResults.map((r, i) => ({ ...r, index: i + 1 }));
+    } catch (error) {
+        console.error("❌ Napaka pri direktnem HTTP klicu:", error.message);
+        return [];
+    }
 }
 
 // --- GLAVNI HANDLER ZA PODNAPIS ---
@@ -170,17 +145,10 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  let browser;
-  try {
-    browser = await getBrowser();
-  } catch (e) {
-    return res.status(503).json({ subtitles: [], error: "Brskalnik se ni uspel zagnati." });
-  }
+  // Iskanje z direktnim fetch klicem
+  const slResults = await fetchSubtitlesDirect(title);
   
-  // Iskanje vseh jezikov in filtriranje na 'sl'
-  const slResults = await fetchSubtitlesForAllLangs(browser, title);
-  
-  // 3. 🧠 ROBUSTNI FILTER
+  // 3. 🧠 FILTER (ostane robusten)
   
   const currentYear = new Date().getFullYear();
   const targetYear = parseInt(year);
@@ -296,8 +264,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.1.0)");
-  console.log("🌐 Zadnji poskus s Puppeteerjem in najbolj tolerantnim parsanjem.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V10.0.0)");
+  console.log("🔥 ULTIMATIVNI POSKUS: Direktni backend HTTP klic.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
