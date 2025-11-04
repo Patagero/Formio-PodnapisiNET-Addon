@@ -18,7 +18,7 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.2.2", // Popravljena napaka ReferenceError
+  version: "9.2.3", // Robustnejše iskanje selektorjev pri prijavi
   name: "Formio Podnapisi.NET 🇸🇮 (Puppeteer + Login)",
   description: "Uporablja Puppeteer za prijavo in nato iskanje, da pridobi seansko stanje.",
   logo: "https://www.podnapisi.net/favicon.ico",
@@ -49,6 +49,7 @@ function saveCache(cache) {
 
 async function getTitleAndYear(imdbId) {
   try {
+    // Uporaba google:search toola ni potrebna, saj imamo API ključ in smo v Node okolju.
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
@@ -101,7 +102,7 @@ async function ensureLoggedIn(browser) {
       return;
   }
   
-  // Poskus nalaganja shranjenih piškotkov
+  // Poskus nalaganja shranjenih piškotkov (nespremenjeno)
   if (fs.existsSync(COOKIE_FILE)) {
       try {
           const cookies = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
@@ -109,7 +110,6 @@ async function ensureLoggedIn(browser) {
           await page.setCookie(...cookies);
           await page.goto('https://www.podnapisi.net/sl/profile', { waitUntil: 'networkidle0' });
           const isLoggedIn = await page.evaluate(() => {
-              // Preveri, ali se pojavi gumb 'Odjava' ali ime uporabnika
               return !!document.querySelector('a[href="/sl/logout"]');
           });
           await page.close();
@@ -132,11 +132,17 @@ async function ensureLoggedIn(browser) {
   try {
     await loginPage.goto('https://www.podnapisi.net/sl/login', { waitUntil: 'domcontentloaded' });
     
-    // Čakanje, da se naložijo polja
-    await loginPage.waitForSelector('form[method="post"]', { timeout: 15000 }); 
+    // Čakanje na OBSTOJ VNOSNEGA POLJA (40 sekund)
+    // Uporabljamo splošen selektor za polje z imenom "username", saj #user_username ne deluje več
+    const usernameSelector = 'input[name*="username"]'; 
+    const passwordSelector = 'input[name*="password"]'; 
     
-    await loginPage.type('#user_username', PN_USER);
-    await loginPage.type('#user_password', PN_PASS);
+    console.log("⏳ Čakanje na prijavna polja z robustnimi selektorji...");
+    // Glavna sprememba: Čakamo na splošni selektor
+    await loginPage.waitForSelector(usernameSelector, { timeout: 40000 }); 
+
+    await loginPage.type(usernameSelector, PN_USER);
+    await loginPage.type(passwordSelector, PN_PASS);
     
     // Klik na gumb za prijavo
     await loginPage.click('input[type="submit"][value="Prijava"]'); 
@@ -183,6 +189,7 @@ async function fetchSubtitlesWithSession(browser, title) {
   
   // Čakanje na tabelo
   try {
+     // Iskalna stran je bolj odporna na blokado kot prijavna, zato je to morda uspelo
      await page.waitForSelector("table.table tbody tr", { timeout: 15000 });
      console.log("✅ Iskalna tabela najdena. Parsam rezultate...");
   } catch (e) {
@@ -299,7 +306,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
   
   // 4. PRENOS IN EKSTRAKCIJA SLOVENSKIH PODNAPISOV (nespremenjeno)
-  // ... (ta del kode je enak)
   const subtitles = [];
   let idx = 1;
   const host = req.protocol + "://" + req.get("host");
@@ -371,8 +377,9 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.2.2)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.2.3)");
   console.log(`🔑 PRIJAVA AKTIVNA: Uporabnik ${PN_USER} poskuša vzpostaviti sejo.`);
+  console.log("🚀 Upajmo, da robusten selektor premaga to prijavo!");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
