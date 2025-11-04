@@ -13,8 +13,8 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.2.0", // Posodobljena verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Stabilno)",
+  version: "8.3.0", // Posodobljena verzija
+  name: "Formio Podnapisi.NET 🇸🇮 (Test No-Login)",
   description: "Išče slovenske podnapise z razširjenim filtrom in podrobnim logom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
@@ -70,6 +70,7 @@ async function getBrowser() {
   }
 }
 
+// OHRANJENA FUNKCIJA, ČEPRAV JO ZDAJ NE KLICEMO IZ app.get
 async function ensureLoggedIn(page) {
   const cookiesPath = path.join(TMP_DIR, "cookies.json");
   if (fs.existsSync(cookiesPath) && globalCookiesLoaded) {
@@ -140,29 +141,34 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
   console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
 
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  
+  // 💡 ROBUSTNOST: Čakamo na tabelo iskalnih rezultatov 
+  try {
+     await page.waitForSelector("table.table tbody tr", { timeout: 10000 });
+     console.log("✅ Iskalna tabela najdena. Parsam rezultate...");
+  } catch (e) {
+     console.log("⚠️ Iskalna tabela podnapisov ni bila najdena v 10 sekundah.");
+     await page.close();
+     return [];
+  }
 
   let results = [];
   try {
     results = await page.$$eval("table.table tbody tr", (rows) =>
       rows.map((row) => {
-        // Link za prenos (download)
         const downloadLink = row.querySelector("a[href*='/download']");
-        
-        // Link s podrobnostmi (ki običajno vsebuje naslov in je v prvem stebru)
         const titleElement = row.querySelector("td:nth-child(1) a[href*='/subtitles/']");
 
         const link = downloadLink ? "https://www.podnapisi.net" + downloadLink.getAttribute('href') : null;
-        
-        // POSODOBITEV: Uporabimo naslov iz titleElement, sicer 'Neznan', a ga filtriramo pozneje
         const title = titleElement?.innerText?.trim() || "Neznan";
         
-        return link && title !== "Neznan" ? { link, title } : null; 
+        // Filtrira vse, kar ni 'Neznan', ker je to bil problem prej
+        return link && title && title !== "Neznan" ? { link, title } : null; 
       }).filter(Boolean)
     );
   } catch (e) {
     console.warn(`⚠️ Napaka pri evaluaciji: ${e.message}. Poskus z regexom.`);
     const html = await page.content();
-    // Regex, ki zajame link za download in naslov podnapisa
     const regex = /<a href="(\/subtitles\/[^\/]+\/download)"[^>]*>\s*(.*?)\s*<\/a>/g;
     let match;
     while ((match = regex.exec(html)) !== null) {
@@ -191,7 +197,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  // 2. PRIDOBITEV INFO IN PRIJAVA
+  // 2. PRIDOBITEV INFO IN PUPPETEER
   const { title, year, type } = await getTitleAndYear(imdbId);
   if (!title || title === imdbId) {
        console.log("❌ Napaka: Ne morem pridobiti naslova filma.");
@@ -206,40 +212,32 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   }
 
   const page = await browser.newPage();
-  await ensureLoggedIn(page);
+  
+  // ⚠️ TEMPORARY BYPASS: Komentiraj to, da testiramo iskanje kot neprijavljen uporabnik
+  // await ensureLoggedIn(page); 
   
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 3. 🧠 IZBOLJŠAN IN TOLERANTEN FILTER
-
-  // Določi, ali naj se letnica uporabi v filtru (ignoriraj prihodnje letnice)
+  // 3. 🧠 FILTER
   const currentYear = new Date().getFullYear();
   const targetYear = parseInt(year);
   const useYearFilter = targetYear && targetYear <= currentYear;
   
   const cleanYear = useYearFilter ? (year || "").replace(/\D+/g, "") : ""; 
   
-  // Bolj tolerantno čiščenje naslova za ključne besede
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
   const titleKeywords = cleanTitle.split(/\s+/).filter(w => w.length > 2); 
 
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     
-    // 1. Preverjanje ujemanja ključnih besed (VSE morajo biti prisotne)
     const keywordsMatch = titleKeywords.every(keyword => t.includes(keyword));
-    
-    // 2. Preverjanje ujemanja letnice (deluje le, če je letnica veljavna)
     const yearOk = cleanYear ? t.includes(cleanYear) : true;
     
-    // 3. Izločanje napačnih tipov/formatov
     const isWrongFormat = 
-        // Film, ki izgleda kot serija in (če filtriramo po letnici) se letnica ne ujema.
         (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t) && useYearFilter && !t.includes(cleanYear)) || 
-        // Serija, ki ne vsebuje S/E oznake, čeprav bi morala.
         (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
 
-    // LOGIRANJE IZLOČITEV
     if (!keywordsMatch) console.log(`🚫 Izločen (manjka ključna beseda): ${r.title}`);
     if (useYearFilter && !yearOk) console.log(`🚫 Izločen (napačna letnica ${cleanYear}): ${r.title}`);
     if (isWrongFormat) console.log(`🚫 Izločen (napačen format film/serija): ${r.title}`);
@@ -291,7 +289,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
         idx++;
       }
       
-      fs.unlinkSync(zipPath); // Počisti ZIP
+      fs.unlinkSync(zipPath); 
 
     } catch (err) {
       console.log(`⚠️ Napaka pri prenosu #${idx}:`, err.message);
@@ -325,7 +323,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.2.0)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.3.0)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
