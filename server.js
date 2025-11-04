@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.6.1",
+  version: "7.6.3",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Hitrejše iskanje slovenskih podnapisov z ohlapnim filtrom (.2025, The.Sinners, ipd.)",
+  description: "Išče samo slovenske podnapise z ohlapnim filtrom in cache sistemom",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -147,24 +147,28 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  const { title, year, type } = await getTitleAndYear(imdbId);
+  const { title, year } = await getTitleAndYear(imdbId);
   const browser = await getBrowser();
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🧠 Pametnejši filter – bolj ohlapen, a še vedno čist
+  // 🧠 Popravljena verzija filtra (ohlapna, prepozna 2025 variante)
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const cleanYear = (year || "").replace(/\D+/g, "");
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     const normalized = t.replace(/[^a-z0-9]+/g, "");
-    const matchTitle = normalized.includes(cleanTitle);
-    const matchYear = cleanYear ? normalized.includes(cleanYear) : true;
-    const isSeries = /(s[0-9]{2}e[0-9]{2}|episode|season)/.test(t);
-    const isWrong = /(saints|lois)/.test(t);
-    return matchTitle && matchYear && !isWrong && (type === "series" ? true : !isSeries);
+
+    const looseMatch =
+      normalized.includes(cleanTitle) ||
+      normalized.includes(cleanTitle + cleanYear) ||
+      normalized.includes(cleanTitle.slice(0, 6)) ||
+      (cleanYear && normalized.includes(cleanYear));
+
+    const isWrong = /(lois|supergirl|saints|series|season|episode)/.test(t);
+    return looseMatch && !isWrong;
   });
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
