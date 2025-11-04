@@ -11,9 +11,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "11.1.0", // Testna verzija - Odstranjen filter!
-  name: "Formio Podnapisi.NET 🇸🇮 (Stealth Fetch, Brez Filtra)",
-  description: "Išče podnapise z 'lažnimi' HTTP glavami in VRNE VSE, kar najde, za testiranje Regexa.",
+  version: "13.0.0", // Naš srečni, reverse-engineering poskus!
+  name: "Formio Podnapisi.NET 🇸🇮 (Kodi Simulation)",
+  description: "Iskanje z najbolj verjetno iskalno potjo in glavami, ki jih uporablja Kodi a4kSubtitles.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -58,57 +58,60 @@ async function getTitleAndYear(imdbId) {
 }
 
 /**
- * Globalno iskanje z 'lažnimi' glavami za zaobid zaščite.
- * Vrne VSE, kar najde.
+ * Globalno iskanje s simulacijo Kodijevega User-Agenta in IMDb ID-ja.
  */
-async function fetchSubtitlesStealth(title) {
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}`;
-    console.log(`🌍 Iščem z lažnimi glavami: ${searchUrl}`);
+async function fetchSubtitlesKodiSim(imdbId, title) {
+    // URL, ki je optimiziran za Kodi dodatke (lahko da je bil to 'skrivni' klic)
+    const searchUrl = `https://www.podnapisi.net/subtitles/search/query?imdb=${imdbId}&query=${encodeURIComponent(title)}&language=sl`;
+    console.log(`🌍 Poskušam KODI SIMULACIJO: ${searchUrl}`);
 
     try {
         const res = await fetch(searchUrl, {
             method: 'GET',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/100.0',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'sl,en-US;q=0.7,en;q=0.3',
-                'Cache-Control': 'max-age=0',
+                // Posnemanje tipičnega Python/Kodi User-Agenta
+                'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-GB; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
                 'Connection': 'keep-alive',
             }
         });
 
+        // Verjetno vrne HTML, ki ga je treba parati
         const html = await res.text();
         
-        // --- PARSIRANJE HTML-ja z REGEX-om (brez filtriranja!) ---
+        // --- PARSIRANJE HTML-ja z REGEX-om ---
         const results = [];
         
-        // Ta Regex je bil posodobljen, da je bolj toleranten
+        // Regex prilagojen na to, da ujamemo celo vrstico in poskuša iz nje izvleči 3 ključne informacije:
+        // Opomba: Ker smo dodali language=sl, pričakujemo večinoma slovenske podnapise!
         const rowRegex = /href="(\/subtitles\/[^/]+\/download)"[\s\S]*?rel="(\w{2})"[^>]*>[\s\S]*?<a[^>]*href="\/subtitles\/[^>]*>([\s\S]*?)<\/a>/g;
         let match;
 
         while ((match = rowRegex.exec(html)) !== null) {
             const linkSuffix = match[1]; 
             const lang = match[2];       
-            const title = match[3].replace(/<[^>]*>/g, '').trim(); 
+            const titleMatch = match[3].replace(/<[^>]*>/g, '').trim(); 
 
-            // Vrnemo VSE, kar je Regex ujel, ne glede na jezik!
-            if (title) { 
+            // Vrnemo VSE, kar je Regex ujel, da vidimo, če dela
+            if (titleMatch) { 
                 results.push({
                     link: "https://www.podnapisi.net" + linkSuffix,
-                    title: title,
+                    title: titleMatch,
                     lang: lang
                 });
             }
         }
         
-        console.log(`✅ Stealth Fetch uspešen. Skupaj najdenih (vsi jeziki): ${results.length}`);
+        console.log(`✅ Kodi simulacija uspešna. Skupaj najdenih (vsi jeziki): ${results.length}`);
         return results;
 
     } catch (error) {
-        console.error("❌ Napaka pri Stealth HTTP klicu:", error.message);
+        console.error("❌ Napaka pri Kodi simulaciji:", error.message);
         return [];
     }
 }
+
 
 // --- GLAVNI HANDLER ZA PODNAPIS ---
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
@@ -116,9 +119,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
-  // 1. CACHE
+  // 1. CACHE (nespremenjeno)
   const cache = loadCache();
-  if (cache[imdbId] && Date.now() - cache[imdbid].timestamp < 24 * 60 * 60 * 1000) {
+  if (cache[imdbId] && Date.now() - cache[imdbId].timestamp < 24 * 60 * 60 * 1000) {
     console.log("⚡ Rezultat iz cache-a");
     return res.json({ subtitles: cache[imdbId].data });
   }
@@ -130,8 +133,8 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
        return res.json({ subtitles: [] });
   }
   
-  // Iskanje z direktnim fetch klicem in stealth glavami (brez filtra!)
-  const allResults = await fetchSubtitlesStealth(title); 
+  // Iskanje s simulacijo Kodija (ključni klic)
+  const allResults = await fetchSubtitlesKodiSim(imdbId, title); 
   
   // Če nismo nič našli, se ustavi.
   if (!allResults.length) {
@@ -141,21 +144,45 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: [] });
   }
   
-  // 3. 🧠 FILTRA NI! VRNEMO VSE, KAR SMO NAŠLI, AMPAK SAMO SLOVENSKE ZA ZADNJO FAZO
-  
-  // Tukaj ponovno filtriramo samo SLO, ker jih ne bomo nalagali vseh
+  // 3. 🧠 FILTER ZA SLOVENSKE
+  // Za nalaganje naprej filtriramo samo SLO, ker jih ne bomo nalagali vseh
   const filteredResults = allResults.filter(r => r.lang === 'sl');
 
-  console.log(`🧩 Skupaj smo našli: ${allResults.length} rezultatov. Naložimo le ${filteredResults.length} slovenskih.`);
+  // Filtriramo tudi tiste, ki niso povezani z iskanim filmom (npr. serija)
+  const finalFilteredResults = filteredResults.filter(r => {
+    const t = r.title.toLowerCase();
+    
+    // Čist naslov za ujemanje
+    const cleanTitle = title.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").trim();
+    const titleKeywords = cleanTitle.split(/\s+/).filter(w => w.length > 2); 
+    const keywordsMatchCount = titleKeywords.filter(keyword => t.includes(keyword)).length;
+    const keywordsMatch = keywordsMatchCount >= Math.ceil(titleKeywords.length / 2) || t.includes(cleanTitle.replace(/\s/g, ''));
+    
+    // Izločanje serijskih/napačnih formatov
+    const isWrongFormat = 
+        (type === 'movie' && /(s\d+e\d+|season|episode)/.test(t)) || 
+        (type === 'series' && !/(s\d+e\d+|season)/.test(t)); 
+
+    return keywordsMatch && !isWrongFormat;
+  });
 
 
+  console.log(`🧩 Skupaj smo našli: ${allResults.length} rezultatov. Filtrirali smo na ${finalFilteredResults.length} slovenskih in relevantnih.`);
+
+  if (!finalFilteredResults.length) {
+    console.log(`❌ Ni bilo najdenih slovenskih in relevantnih podnapisov za ${title}`);
+    cache[imdbId] = { timestamp: Date.now(), data: [] };
+    saveCache(cache);
+    return res.json({ subtitles: [] });
+  }
+  
   // 4. PRENOS IN EKSTRAKCIJA SLOVENSKIH PODNAPISOV
   const subtitles = [];
   let idx = 1;
 
   const host = req.protocol + "://" + req.get("host");
 
-  for (const r of filteredResults) {
+  for (const r of finalFilteredResults) {
     const downloadLink = r.link;
     const uniqueId = `${imdbId}_${idx}`;
     const zipPath = path.join(TMP_DIR, `${uniqueId}.zip`);
@@ -223,8 +250,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V11.1.0)");
-  console.log("🔥 TESTIRANJE: Odstranili smo filter za jezik/naslov. Parsanje mora zdaj delati.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V13.0.0)");
+  console.log("🐍 KODI SIMULACIJA: Uporabljamo najbolj verjetno API pot in User-Agent.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
