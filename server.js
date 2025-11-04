@@ -3,7 +3,6 @@ import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-// Ohranimo Puppeteer in Chromium, da lahko obiščemo stran
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import AdmZip from "adm-zip";
@@ -14,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.0.0", // Nova verzija
-  name: "Formio Podnapisi.NET 🇸🇮 (Global Search)",
-  description: "Iskanje brez prijave, najde vse podnapise, filtrira v slovenščino.",
+  version: "9.1.0", // Posodobljena verzija
+  name: "Formio Podnapisi.NET 🇸🇮 (Ultra-Tolerant Parse)",
+  description: "Iskanje brez prijave, najde vse podnapise z najbolj tolerantnim parsanjem HTML.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -30,7 +29,7 @@ const CACHE_FILE = path.join(TMP_DIR, "cache.json");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
 
-const langMap = { sl: "🇸🇮", en: "🇬🇧", hr: "🇭🇷" }; // Dodamo še kake jezike za lažje logiranje
+const langMap = { sl: "🇸🇮", en: "🇬🇧", hr: "🇭🇷" };
 
 // --- CACHE FUNKCIJE ---
 function loadCache() {
@@ -86,59 +85,60 @@ async function getTitleAndYear(imdbId) {
 }
 
 /**
- * Globalno iskanje vseh podnapisov brez omejitve na jezik.
- * Nato izloči slovenske.
+ * Globalno iskanje vseh podnapisov brez omejitve na jezik in ultra-tolerantno parsanje.
  */
 async function fetchSubtitlesForAllLangs(browser, title) {
   const page = await browser.newPage();
-  // Iskalni URL brez parametra language
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}`;
   console.log(`🌍 Iščem globalno (vsi jeziki): ${searchUrl}`);
 
   await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   
-  // Čakamo na tabelo in lovimo napake pri parsiranju
   try {
      await page.waitForSelector("table.table tbody tr", { timeout: 15000 });
-     console.log("✅ Iskalna tabela najdena. Parsam rezultate...");
+     console.log("✅ Iskalna tabela najdena. Parsam rezultate z ultra-toleranco...");
   } catch (e) {
-     console.log("⚠️ Iskalna tabela podnapisov ni bila najdena v 15 sekundah (morda je strežnik blokiral ali pa ni rezultatov).");
+     console.log("⚠️ Iskalna tabela podnapisov ni bila najdena v 15 sekundah (blokada/prazno).");
      await page.close();
      return [];
   }
 
   let results = [];
   try {
-    results = await page.$$eval("table.table tbody tr", (rows) =>
-      rows.map((row) => {
-        // Pomembno: S Puppeteerjem parsamo tudi jezik!
-        const downloadLink = row.querySelector("a[href*='/download']");
-        const titleElement = row.querySelector("td:nth-child(1) a[href*='/subtitles/']");
-        const langElement = row.querySelector("td.language span"); // Selektor za jezikovno zastavico/oznako
-
-        const link = downloadLink ? "https://www.podnapisi.net" + downloadLink.getAttribute('href') : null;
-        const title = titleElement?.innerText?.trim() || "Neznan";
+    results = await page.$$eval("table", (tables) => {
+        // Združi vse vrstice iz vseh tabel na strani
+        const rows = tables.flatMap(table => Array.from(table.querySelectorAll("tbody tr")));
         
-        // Poskus ekstrakcije jezika (najti moramo relativen podatek)
-        let lang = "unknown";
-        if (langElement) {
-            // Predpostavimo, da je koda jezika v rel (npr. 'sl', 'en') ali v naslovu
-            const langRel = langElement.getAttribute('rel');
-            if (langRel && langRel.length === 2) {
-                lang = langRel;
-            } else {
-                // Poskusi iz naslova ali razreda (če je tam)
-                lang = langElement.title?.toLowerCase()?.slice(0, 2) || "unknown";
+        return rows.map((row) => {
+            // 1. Link za prenos (najbolj zanesljiv element)
+            const downloadLink = row.querySelector("a[href*='/download']");
+            
+            // 2. Naslov (iščemo v kateremkoli linku v prvi celici)
+            const titleElement = row.querySelector("td:nth-child(1) a"); 
+            
+            // 3. Jezik (iščemo v kateremkoli 'span' z rel atributom ali v celici za jezik)
+            const langElement = row.querySelector("span[rel], td.language span"); 
+            
+            const link = downloadLink ? "https://www.podnapisi.net" + downloadLink.getAttribute('href') : null;
+            const title = titleElement?.innerText?.trim() || "Neznan";
+            
+            // Poskus ekstrakcije jezika
+            let lang = "unknown";
+            if (langElement) {
+                // Poskusi iz rel="koda"
+                lang = langElement.getAttribute('rel') || "unknown"; 
+                // Poskusi iz title atributa, če je tam koda (sl, en, ...)
+                if (lang === "unknown" && langElement.title) {
+                    lang = langElement.title.toLowerCase().slice(0, 2);
+                }
             }
-        }
-        
-        // Filtrira le rezultate z veljavnim linkom, ki niso 'Neznan' in imajo jezik
-        return link && title !== "Neznan" && lang !== "unknown" ? { link, title, lang } : null; 
-      }).filter(Boolean)
-    );
+            
+            // Samo popolni zadetki gredo naprej
+            return link && title !== "Neznan" && lang.length === 2 ? { link, title, lang } : null; 
+        }).filter(Boolean);
+    });
   } catch (e) {
     console.error(`❌ Kritična napaka pri evalvaciji/parsiranju rezultatov: ${e.message}`);
-    // Tukaj ne bomo delali regex parsiranja, saj je DDG bolj zanesljiv za to
     await page.close();
     return [];
   }
@@ -223,7 +223,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: [] });
   }
   
-  // 4. PRENOS IN EKSTRAKCIJA (ostane enako)
+  // 4. PRENOS IN EKSTRAKCIJA
   const subtitles = [];
   let idx = 1;
 
@@ -296,8 +296,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.0.0)");
-  console.log("🌐 Poskus globalnega iskanja (brez prijave) s Puppeteerjem.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V9.1.0)");
+  console.log("🌐 Zadnji poskus s Puppeteerjem in najbolj tolerantnim parsanjem.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
