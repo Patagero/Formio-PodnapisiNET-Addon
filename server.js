@@ -18,9 +18,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.0.3", // Popravljeno parsiranje naslova, da prepreči "Neznan"
-  name: "Formio Podnapisi.NET 🇸🇮 (Stabilno Parsiranje)",
-  description: "Iskanje po IMDb ID-ju s popravljenim branjem naslovov iz tabele.",
+  version: "8.0.4", // Regex prioriteta pri iskanju po naslovu
+  name: "Formio Podnapisi.NET 🇸🇮 (Regex Napad)",
+  description: "Uporablja iskanje po IMDb ID-ju, pri neuspehu preklopi na robusten Regex Fallback.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -121,20 +121,17 @@ async function fetchSubtitlesForLang(browser, title, langCode, imdbId) {
   let results = [];
   let successfulParse = false;
   
-  // FUNKCIJA ZA PARSIRANJE REZULTATOV (POSODOBLJENA ZA ROBUSTNO BRANJE NASLOVA)
+  // FUNKCIJA ZA PARSIRANJE REZULTATOV (v primeru, da table.$$eval uspe)
   const parseResults = async () => {
     try {
       return await page.$$eval("table.table tbody tr", (rows) =>
         rows.map((row) => {
           const downloadLink = row.querySelector("a[href*='/download']")?.href;
-          
-          // POSODOBITEV: Iščemo naslov v prvem stolpcu (najbolj zanesljivo)
           const titleElement = row.querySelector("td:nth-child(1) a");
           
-          // Uporabimo besedilo prvega stolpca ali besedilo linka, če prvo odpove.
           const title = titleElement?.innerText?.trim() || "Neznan"; 
           
-          // Dodatna varnost, če je naslov "Neznan", preverimo še celotno vrstico.
+          // Izkljucno za V8.0.3 popravek:
           if (title === "Neznan") {
              const rowText = row.innerText;
              // Če vrstica vsebuje besedo "Sinners" (za primer tt31193180), ne zavrzemo takoj.
@@ -147,7 +144,7 @@ async function fetchSubtitlesForLang(browser, title, langCode, imdbId) {
         }).filter(Boolean)
       );
     } catch (e) {
-      console.log(`⚠️ Napaka pri parsiranju s Puppeteerjem: ${e.message}.`);
+      // Ignoriramo napako pri parsiranju s Puppeteerjem.
       return [];
     }
   };
@@ -162,27 +159,30 @@ async function fetchSubtitlesForLang(browser, title, langCode, imdbId) {
   results = await parseResults();
   if (results.length > 0 && results.filter(r => r.title !== "Neznan").length > 0) successfulParse = true;
 
-  // 2. **POSKUS B: Če ni rezultatov po ID-ju, išči po naslovu**
+  // 2. **POSKUS B: Če ni rezultatov po ID-ju, išči po naslovu (Regex prioriteta)**
   if (!successfulParse) {
       searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${langCode}`;
-      console.log(`🌍 Iščem (${langCode}) po NASLOVU (FallBack): ${searchUrl}`);
+      console.log(`🌍 Iščem (${langCode}) po NASLOVU (FallBack - Regex): ${searchUrl}`);
       
       await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
       await new Promise(r => setTimeout(r, 2500));
       
-      results = await parseResults();
-      
-      // KONČNI FALLBACK NA REGEX (če Puppeteer parsiranje odpove pri naslovnem iskanju)
-      if (results.length === 0) {
-          const html = await page.content();
-          const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
-          let match;
-          while ((match = regex.exec(html)) !== null) {
-              const link = "https://www.podnapisi.net" + match[1];
-              const title = match[2].trim();
-              results.push({ link, title });
+      // *** KLJUČNA SPREMEMBA: NE UPORABIMO parseResults(), ampak GREMO DIREKTNO na Regex ***
+      const html = await page.content();
+      const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
+      let match;
+      results = []; // Resetiramo rezultate
+      while ((match = regex.exec(html)) !== null) {
+          const link = "https://www.podnapisi.net" + match[1];
+          const rawTitle = match[2].trim();
+          
+          if (link.includes("download") && rawTitle.length > 3) {
+             results.push({ link, title: rawTitle });
           }
       }
+      // Če najdemo rezultate, je Fallback uspel.
+      if (results.length > 0) successfulParse = true;
+
   }
   
   await page.close();
@@ -288,7 +288,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 
       const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
       if (srtFile) {
-        // Popravimo ime podnapisa, če je bilo "Prisilno"
         const finalTitle = r.title.includes("(Prisilno)") ? title : r.title;
           
         subtitles.push({
@@ -332,8 +331,8 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.3)");
-  console.log("🔧 Popravek: Agresivno parsiranje, da se izogne 'Neznanemu' naslovu.");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.4)");
+  console.log("💥 ZADNJA LINIJA: Regex zdaj prioriteta pri iskanju po naslovu.");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
