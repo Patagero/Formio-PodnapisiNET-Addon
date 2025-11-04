@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.5.0",
+  version: "7.6.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče slovenske podnapise s prijavo, cache in izboljšanim filtrom (The.Sinners, .2025 podpora)",
+  description: "Hitrejše iskanje slovenskih podnapisov z ohlapnim filtrom (.2025, The.Sinners, ipd.)",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -80,7 +80,7 @@ async function ensureLoggedIn(page) {
     );
     console.log("✅ Prijava uspešna.");
   } catch {
-    console.log("⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
+    console.log(⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
   }
 
   const cookies = await page.cookies();
@@ -95,12 +95,12 @@ async function getTitleAndYear(imdbId) {
     const data = await res.json();
     if (data?.Title) {
       console.log(`🎬 IMDb → ${data.Title} (${data.Year})`);
-      return { title: data.Title.trim(), year: data.Year || "" };
+      return { title: data.Title.trim(), year: data.Year || "", type: data.Type || "movie" };
     }
   } catch {
     console.log("⚠️ Napaka IMDb API");
   }
-  return { title: imdbId, year: "" };
+  return { title: imdbId, year: "", type: "movie" };
 }
 
 async function fetchSubtitlesForLang(browser, title, langCode) {
@@ -147,25 +147,24 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  const { title, year } = await getTitleAndYear(imdbId);
+  const { title, year, type } = await getTitleAndYear(imdbId);
   const browser = await getBrowser();
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  // 🎯 Izboljšan filter: ujame “The.Sinners”, “Sinners.2025” ipd., izloči “Saints and Sinners”, “Lois” itd.
+  // 🧠 Pametnejši filter – bolj ohlapen, a še vedno čist
   const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const cleanYear = (year || "").replace(/\D+/g, "");
   const filteredResults = slResults.filter(r => {
     const t = r.title.toLowerCase();
     const normalized = t.replace(/[^a-z0-9]+/g, "");
-    const isMatch =
-      normalized.includes(cleanTitle) ||
-      normalized.startsWith("the" + cleanTitle) ||
-      normalized.startsWith(cleanTitle + "20") ||
-      normalized.startsWith(cleanTitle + year);
-    const isWrong = /(saints|lois|series|episode)/.test(t);
-    return isMatch && !isWrong;
+    const matchTitle = normalized.includes(cleanTitle);
+    const matchYear = cleanYear ? normalized.includes(cleanYear) : true;
+    const isSeries = /(s[0-9]{2}e[0-9]{2}|episode|season)/.test(t);
+    const isWrong = /(saints|lois)/.test(t);
+    return matchTitle && matchYear && !isWrong && (type === "series" ? true : !isSeries);
   });
 
   console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
@@ -224,7 +223,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (boljši filter + cache + prijava)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (ohlapen filter + cache + prijava)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
