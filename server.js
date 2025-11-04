@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "6.3.3",
+  version: "6.4.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče samo slovenske podnapise s prijavo in cache sistemom",
+  description: "Išče samo slovenske podnapise z napredno filtracijo po letnici in naslovu",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -106,18 +106,18 @@ async function ensureLoggedIn(page) {
 }
 
 // 🎬 IMDb → naslov (brez letnice)
-async function getTitleFromIMDb(imdbId) {
+async function getTitleAndYear(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
       console.log(`🎬 IMDb → ${data.Title} (${data.Year})`);
-      return data.Title.trim(); // 🔥 brez letnice
+      return { title: data.Title.trim(), year: data.Year || "" };
     }
   } catch {
     console.log("⚠️ Napaka IMDb API");
   }
-  return imdbId;
+  return { title: imdbId, year: "" };
 }
 
 async function fetchSubtitlesForLang(browser, title, langCode) {
@@ -164,15 +164,27 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  const title = await getTitleFromIMDb(imdbId);
+  const { title, year } = await getTitleAndYear(imdbId);
   const browser = await getBrowser();
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
-  // 🔎 Iščemo samo slovenske 🇸🇮
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
-  if (!slResults.length) {
+  // 🎯 Filtracija po naslovu in letnici
+  const filteredResults = slResults.filter(r => {
+    const name = r.title.toLowerCase();
+    const cleanTitle = title.toLowerCase();
+
+    if (name.includes("s0") || name.includes("e0") || name.includes("lois") || name.includes("series")) return false;
+    if (year && !name.includes(year)) return false;
+
+    return name.includes(cleanTitle);
+  });
+
+  console.log(`🧩 Po filtriranju ostane ${filteredResults.length} 🇸🇮 relevantnih podnapisov.`);
+
+  if (!filteredResults.length) {
     console.log("❌ Ni bilo najdenih slovenskih podnapisov.");
     return res.json({ subtitles: [] });
   }
@@ -180,7 +192,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const subtitles = [];
   let idx = 1;
 
-  for (const r of slResults) {
+  for (const r of filteredResults) {
     const downloadLink = r.link;
     const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
     const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
@@ -200,7 +212,7 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
           id: `formio-podnapisi-${idx}`,
           url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${idx}/${encodeURIComponent(srtFile)}`,
           lang: r.lang,
-          name: `${flag} ${r.title} (${r.lang.toUpperCase()})`
+          name: `${flag} ${r.title}`
         });
         console.log(`📜 [${r.lang}] ${srtFile}`);
         idx++;
@@ -226,7 +238,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (brez letnice, login cache, samo slovenski podnapisi)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (filtracija po letnici in naslovu)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
