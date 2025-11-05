@@ -1,5 +1,5 @@
 // ==================================================
-//  Formio Podnapisi.NET 🇸🇮 — Render-safe verzija V8.0.7
+//  Formio Podnapisi.NET 🇸🇮 — Render-safe verzija V8.1.0
 // ==================================================
 import express from "express";
 import cors from "cors";
@@ -17,13 +17,13 @@ app.use(express.json());
 const TMP_DIR = path.join(os.tmpdir(), "formio_podnapisi");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// === GLAVNA FUNKCIJA ZA PODNAPISE ===
+// === FUNKCIJA: Puppeteer prijava + iskanje ===
 async function scrapeSubtitles(imdbId) {
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
   const searchUrl = `https://www.podnapisi.net/subtitles/search/?keywords=${imdbId}`;
+  const loginUrl = "https://www.podnapisi.net/sl/login";
   let executablePath;
 
-  // --- Puppeteer poskus ---
   try {
     executablePath = await chromium.executablePath();
     console.log(`🧠 Chromium zagnan iz: ${executablePath}`);
@@ -37,10 +37,28 @@ async function scrapeSubtitles(imdbId) {
     });
 
     const page = await browser.newPage();
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 15000 });
 
+    // --- Prijava (če imamo podatke) ---
+    if (process.env.PODNAPISI_USER && process.env.PODNAPISI_PASS) {
+      console.log("🔐 Prijava v podnapisi.net ...");
+      try {
+        await page.goto(loginUrl, { waitUntil: "networkidle2" });
+        await page.type('input[name="username"]', process.env.PODNAPISI_USER, { delay: 50 });
+        await page.type('input[name="password"]', process.env.PODNAPISI_PASS, { delay: 50 });
+        await Promise.all([
+          page.click('button[type="submit"], input[type="submit"]'),
+          page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }),
+        ]);
+        console.log("✅ Prijava uspešna");
+      } catch (err) {
+        console.warn("⚠️ Prijava ni uspela:", err.message);
+      }
+    }
+
+    // --- Iskanje ---
+    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 15000 });
     const results = await page.evaluate(() => {
-      const items = Array.from(document.querySelectorAll(".subtitle-entry"));
+      const items = Array.from(document.querySelectorAll("tr.subtitle-entry"));
       return items.map((el) => ({
         title: el.querySelector(".release")?.textContent?.trim(),
         lang: el.querySelector(".language")?.textContent?.trim(),
@@ -66,15 +84,17 @@ async function scrapeSubtitles(imdbId) {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept-Language": "sl-SI,sl;q=0.9,en;q=0.8",
       },
     });
 
     const html = await resp.text();
     const regex =
-      /<a href="\/subtitles\/[^"]+"[^>]*>\s*<span[^>]*>([^<]+)<\/span>\s*<\/a>[\s\S]*?<span class="language">([^<]+)<\/span>/g;
+      /<tr[^>]*class="subtitle-entry"[^>]*>[\s\S]*?<td[^>]*class="release"[^>]*>(.*?)<\/td>[\s\S]*?<td[^>]*class="language"[^>]*>(.*?)<\/td>/g;
+
     const matches = [...html.matchAll(regex)].map((m) => ({
-      title: m[1]?.trim(),
-      lang: m[2]?.trim(),
+      title: m[1]?.replace(/<[^>]+>/g, "").trim(),
+      lang: m[2]?.replace(/<[^>]+>/g, "").trim(),
     }));
 
     console.log(`✅ Fallback našel ${matches.length} rezultatov`);
@@ -113,7 +133,6 @@ app.get("/", (req, res) => {
   res.send(`
     <h1>✅ Formio Podnapisi.NET 🇸🇮 Addon je aktiven</h1>
     <p>Manifest: <a href="/manifest.json">/manifest.json</a></p>
-    <p>Testni primeri:</p>
     <ul>
       <li><a href="/subtitles/movie/tt0120338.json">Titanic (1997)</a></li>
       <li><a href="/subtitles/movie/tt1375666.json">Inception (2010)</a></li>
@@ -126,10 +145,10 @@ app.get("/", (req, res) => {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
-    version: "8.0.7",
-    name: "Formio Podnapisi.NET 🇸🇮 (Regex Napad)",
+    version: "8.1.0",
+    name: "Formio Podnapisi.NET 🇸🇮 (Prijava + Regex Fallback)",
     description:
-      "Uporablja iskanje po IMDb ID-ju, pri neuspehu preklopi na robusten Fetch Fallback.",
+      "Uporablja prijavo na podnapisi.net in iskanje po IMDb ID-ju; pri neuspehu preklopi na Fetch fallback.",
     logo: "https://www.podnapisi.net/favicon.ico",
     types: ["movie", "series"],
     resources: ["subtitles"],
@@ -152,8 +171,8 @@ app.listen(PORT, "0.0.0.0", () => {
   const PUBLIC_URL = `https://${host}`;
 
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.7, Render-safe Chromium)");
-  console.log("💥 Regex prioriteta pri iskanju po naslovu aktivna");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.1.0, Render-safe Chromium)");
+  console.log("💥 Regex prioriteta + prijava aktivna");
   console.log(`🌐 Manifest: ${PUBLIC_URL}/manifest.json`);
   console.log("==================================================");
 });
