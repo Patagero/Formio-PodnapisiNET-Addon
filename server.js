@@ -1,5 +1,5 @@
 // ==================================================
-//  Formio Podnapisi.NET 🇸🇮  —  Render-safe verzija V8.0.5
+//  Formio Podnapisi.NET 🇸🇮 — Render-safe verzija V8.0.6
 // ==================================================
 import express from "express";
 import cors from "cors";
@@ -17,11 +17,25 @@ app.use(express.json());
 const TMP_DIR = path.join(os.tmpdir(), "formio_podnapisi");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// === DEMO SCRAPER ===
+// === GLAVNA FUNKCIJA ZA PODNAPISE ===
 async function scrapeSubtitles(imdbId) {
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
   const searchUrl = `https://www.podnapisi.net/subtitles/search/?keywords=${imdbId}`;
-  const executablePath = await chromium.executablePath;
+  let executablePath;
+
+  try {
+    executablePath = await chromium.executablePath();
+    console.log(`🧠 Chromium zagnan iz: ${executablePath}`);
+  } catch (err) {
+    console.warn("⚠️ Chromium ni bil najden, poskus z lokalnim Puppeteerjem...");
+    try {
+      executablePath = puppeteer.executablePath
+        ? puppeteer.executablePath()
+        : "/usr/bin/chromium-browser";
+    } catch {
+      executablePath = "/usr/bin/chromium-browser";
+    }
+  }
 
   const browser = await puppeteer.launch({
     args: chromium.args,
@@ -45,7 +59,7 @@ async function scrapeSubtitles(imdbId) {
   return results;
 }
 
-// === API ZA PODNAPISE ===
+// === API POT ZA ISKANJE PODNAPISOV ===
 app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   const { imdbId } = req.params;
   try {
@@ -57,7 +71,7 @@ app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   }
 });
 
-// === DATOTEKE (TMP predpomnilnik) ===
+// === SERVIRANJE DATOTEK IZ TMP ===
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
@@ -68,7 +82,7 @@ app.get("/files/:id/:file", (req, res) => {
   }
 });
 
-// === ROOT STRAN ===
+// === INFO STRAN ===
 app.get("/", (req, res) => {
   res.send(`
     <h1>✅ Formio Podnapisi.NET 🇸🇮 Addon je aktiven</h1>
@@ -82,11 +96,11 @@ app.get("/", (req, res) => {
   `);
 });
 
-// === MANIFEST ZA STREMIO ===
+// === STREMIO MANIFEST ===
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
-    version: "8.0.5",
+    version: "8.0.6",
     name: "Formio Podnapisi.NET 🇸🇮 (Regex Napad)",
     description:
       "Uporablja iskanje po IMDb ID-ju, pri neuspehu preklopi na robusten Regex Fallback.",
@@ -104,9 +118,7 @@ app.get("/ping", (req, res) => {
 
 // === ZAGON STREŽNIKA ===
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, "0.0.0.0", () => {
-  // Če Render ne poda env URL, uporabimo znanega
   const host =
     process.env.RENDER_EXTERNAL_URL ||
     process.env.RENDER_URL ||
@@ -114,7 +126,7 @@ app.listen(PORT, "0.0.0.0", () => {
   const PUBLIC_URL = `https://${host}`;
 
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.5, Render-safe Chromium)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.6, Render-safe Chromium)");
   console.log("💥 Regex prioriteta pri iskanju po naslovu aktivna");
   console.log(`🌐 Manifest: ${PUBLIC_URL}/manifest.json`);
   console.log("==================================================");
