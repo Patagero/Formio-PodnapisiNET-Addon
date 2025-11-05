@@ -12,20 +12,36 @@ app.get("/manifest.json", (req, res) => {
     id: "formio.podnapisinet.si",
     version: "1.0.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Slovenski podnapisi za Stremio",
+    description: "Slovenski podnapisi za Stremio (Render-safe)",
     types: ["movie"],
     resources: ["subtitles"],
     idPrefixes: ["tt"],
   });
 });
 
-// === Sample subtitles route (test) ===
+// === Subtitles route ===
 app.get("/subtitles/movie/:imdbId.json", async (req, res) => {
   const { imdbId } = req.params;
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
 
   let browser;
+  let replied = false;
+
+  // ⏰ Timeout varovalo — če Puppeteer zmrzne
+  const timeout = setTimeout(() => {
+    if (!replied) {
+      replied = true;
+      console.error("⚠️ Timeout: Puppeteer se ni zagnal pravočasno.");
+      res.json({ imdbId, subtitles: [], status: "timeout" });
+    }
+  }, 20000); // 20 sekund
+
   try {
+    console.log("🚀 Zaganjam Chromium...");
+
+    const executablePath = await chromium.executablePath();
+    console.log("📁 Chromium pot:", executablePath);
+
     browser = await puppeteer.launch({
       args: [
         ...chromium.args,
@@ -35,25 +51,44 @@ app.get("/subtitles/movie/:imdbId.json", async (req, res) => {
         "--disable-dev-shm-usage",
       ],
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      executablePath,
       headless: chromium.headless,
       userDataDir: "/tmp/puppeteer",
+      timeout: 30000,
     });
+
+    console.log("✅ Chromium zagnan!");
 
     const page = await browser.newPage();
     await page.goto("https://www.podnapisi.net", { waitUntil: "domcontentloaded" });
 
-    // Tu bo kasneje tvoj scraping del — za zdaj pošljemo testni JSON:
-    res.json({
-      imdbId,
-      subtitles: [],
-      status: "OK",
-    });
+    // 💡 Tu bo kasneje scraping logika; zdaj samo testni odziv:
+    if (!replied) {
+      replied = true;
+      clearTimeout(timeout);
+      res.json({
+        imdbId,
+        subtitles: [],
+        status: "OK (Chromium launched)",
+      });
+      console.log(`✅ Zahteva ${imdbId} uspešno zaključena.`);
+    }
   } catch (err) {
     console.error("❌ Puppeteer napaka:", err);
-    res.status(500).json({ error: err.message });
+    if (!replied) {
+      replied = true;
+      clearTimeout(timeout);
+      res.status(500).json({ error: err.message });
+    }
   } finally {
-    if (browser) await browser.close();
+    if (browser) {
+      try {
+        await browser.close();
+        console.log("🧹 Chromium zaprt.");
+      } catch (closeErr) {
+        console.error("⚠️ Napaka pri zapiranju brskalnika:", closeErr);
+      }
+    }
   }
 });
 
