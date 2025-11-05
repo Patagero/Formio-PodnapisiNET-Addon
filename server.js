@@ -15,7 +15,7 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 app.use(express.json());
 
-// --- SCRAPER FUNKCIJA (poenostavljena) ---
+// --- OSNOVNI SCRAPER (demo) ---
 async function scrapeSubtitles(imdbId) {
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
   const searchUrl = `https://www.podnapisi.net/subtitles/search/?keywords=${imdbId}`;
@@ -55,7 +55,7 @@ app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   }
 });
 
-// --- DATOTEKE (lokalni TMP predpomnilnik) ---
+// --- DATOTEKE (TMP predpomnilnik) ---
 app.get("/files/:id/:file", (req, res) => {
   const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
   if (fs.existsSync(filePath)) {
@@ -71,10 +71,11 @@ app.get("/", (req, res) => {
   res.send(`
     <h1>✅ Formio Podnapisi.NET 🇸🇮 Addon je aktiven</h1>
     <p>Manifest: <a href="/manifest.json">/manifest.json</a></p>
-    <p>Primeri:</p>
+    <p>Testni primeri:</p>
     <ul>
       <li><a href="/subtitles/movie/tt0120338.json">Titanic (1997)</a></li>
       <li><a href="/subtitles/movie/tt1375666.json">Inception (2010)</a></li>
+      <li><a href="/ping">Ping test</a></li>
     </ul>
   `);
 });
@@ -101,10 +102,13 @@ app.get("/ping", (req, res) => {
 
 // --- ZAŽENI STREŽNIK ---
 const PORT = process.env.PORT || 10000;
+const PUBLIC_URL =
+  process.env.RENDER_EXTERNAL_URL || `localhost:${PORT}`;
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
   console.log("✅ Formio Podnapisi.NET 🇸🇮 AKTIVEN (V8.0.4, Render-safe Chromium)");
   console.log("💥 Regex prioriteta pri iskanju po naslovu aktivna");
-  console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
+  console.log(`🌐 Manifest: https://${PUBLIC_URL}/manifest.json`);
   console.log("==================================================");
 });
