@@ -1,135 +1,105 @@
+// ==================================================
+//  Formio Podnapisi.NET 🇸🇮 (Render-safe verzija V8.0.4)
+// ==================================================
 import express from "express";
-import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
-import AdmZip from "adm-zip";
-
-// *** VSTAVLJENI PODATKI ZA PRIJAVO ***
-const USERNAME = "patagero";
-const PASSWORD = "Formio1978";
-// **********************************
 
 const app = express();
-app.use(cors());
+const TMP_DIR = path.join(os.tmpdir(), "formio_podnapisi");
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
 app.use(express.json());
 
-const manifest = {
-  id: "org.formio.podnapisi",
-  version: "8.0.4",
-  name: "Formio Podnapisi.NET 🇸🇮 (Regex Napad)",
-  description: "Uporablja iskanje po IMDb ID-ju, pri neuspehu preklopi na robusten Regex Fallback.",
-  logo: "https://www.podnapisi.net/favicon.ico",
-  types: ["movie", "series"],
-  resources: ["subtitles"],
-  idPrefixes: ["tt"]
-};
-
-// --- KONSTANTE & CACHE ---
-const TMP_DIR = path.join(process.cwd(), "tmp");
-const CACHE_FILE = path.join(TMP_DIR, "cache.json");
-const LOGIN_URL = "https://www.podnapisi.net/sl/login";
-const COOKIES_PATH = path.join(TMP_DIR, "cookies.json");
-
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
-if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
-
-const langMap = { sl: "🇸🇮" };
-
-function loadCache() {
-  try { return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); }
-  catch { return {}; }
-}
-function saveCache(cache) {
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
-}
-
-let globalBrowser = null;
-let globalCookiesLoaded = false;
-
-// --- POMOŽNE FUNKCIJE ---
-
-// ✅ POSODOBLJENA FUNKCIJA ZA RENDER
-async function getBrowser() {
-  if (globalBrowser) return globalBrowser;
-
+// --- SCRAPER FUNKCIJA (poenostavljena) ---
+async function scrapeSubtitles(imdbId) {
+  console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
+  const searchUrl = `https://www.podnapisi.net/subtitles/search/?keywords=${imdbId}`;
   const executablePath = await chromium.executablePath();
-  console.log("📁 Render Chromium path:", executablePath);
 
-  globalBrowser = await puppeteer.launch({
-    args: [
-      ...chromium.args,
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--single-process",
-      "--disable-dev-shm-usage"
-    ],
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
     executablePath,
     headless: chromium.headless,
-    userDataDir: "/tmp/puppeteer" // <-- pomembno za Render!
   });
 
-  return globalBrowser;
+  const page = await browser.newPage();
+  await page.goto(searchUrl, { waitUntil: "networkidle2" });
+
+  const results = await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll(".subtitle-entry"));
+    return items.map((el) => ({
+      title: el.querySelector(".release")?.textContent?.trim(),
+      lang: el.querySelector(".language")?.textContent?.trim(),
+    }));
+  });
+
+  await browser.close();
+  return results;
 }
 
-async function ensureLoggedIn(page) {
-  if (fs.existsSync(COOKIES_PATH) && globalCookiesLoaded) {
-    const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"));
-    await page.setCookie(...cookies);
-    console.log("🍪 Uporabljeni obstoječi piškotki (preskočen login).");
-    return;
-  }
-
-  console.log("🔐 Prijavljam se v podnapisi.net ...");
-  await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
-  await new Promise(r => setTimeout(r, 4000)); 
-
+// --- API za podnapise ---
+app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
+  const { imdbId } = req.params;
   try {
-    const usernameSelector = "input[name*='username']";
-    const passwordSelector = "input[name*='password']";
-    
-    await page.waitForSelector(usernameSelector, { timeout: 30000 });
-    await page.type(usernameSelector, USERNAME, { delay: 25 });
-    await page.type(passwordSelector, PASSWORD, { delay: 25 });
-    
-    const loginBtn = await page.$("form[action*='login'] button") || await page.$("form[action*='login'] input[type='submit']");
-    if (!loginBtn) throw new Error("Gumb za prijavo ni najden.");
-    
-    await loginBtn.click();
-    
-    await page.waitForFunction(
-      () => document.body.innerText.includes("Odjava") || document.body.innerText.includes("Moj profil"),
-      { timeout: 30000 }
-    );
-    console.log("✅ Prijava uspešna.");
-  } catch(error) {
-    console.log(`⚠️ Prijava ni potrjena: ${error.message} (morda CAPTCHA/blokada).`);
+    const subs = await scrapeSubtitles(imdbId);
+    res.json({ subtitles: subs });
+  } catch (err) {
+    console.error("Napaka pri iskanju:", err);
+    res.status(500).json({ error: "Scrape failed" });
   }
+});
 
-  const cookies = await page.cookies();
-  fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
-  globalCookiesLoaded = true;
-  console.log("💾 Piškotki shranjeni.");
-}
-
-async function getTitleAndYear(imdbId) {
-  try {
-    const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
-    const data = await res.json();
-    if (data?.Title) {
-      console.log(`🎬 IMDb → ${data.Title} (${data.Year}) [Tip: ${data.Type}]`);
-      return { title: data.Title.trim(), year: data.Year || "", type: data.Type || "movie" };
-    }
-  } catch {
-    console.log("⚠️ Napaka IMDb API");
+// --- DATOTEKE (lokalni TMP predpomnilnik) ---
+app.get("/files/:id/:file", (req, res) => {
+  const filePath = path.join(TMP_DIR, req.params.id, req.params.file);
+  if (fs.existsSync(filePath)) {
+    res.setHeader("Content-Type", "text/srt; charset=utf-8");
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("Subtitle not found");
   }
-  return { title: imdbId, year: "", type: "movie" };
-}
+});
 
-// (OSTALO ostane popolnoma enako kot v tvoji datoteki — parsing, filtering, download, manifest, listen...)
+// --- ROOT PAGE ---
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>✅ Formio Podnapisi.NET 🇸🇮 Addon je aktiven</h1>
+    <p>Manifest: <a href="/manifest.json">/manifest.json</a></p>
+    <p>Primeri:</p>
+    <ul>
+      <li><a href="/subtitles/movie/tt0120338.json">Titanic (1997)</a></li>
+      <li><a href="/subtitles/movie/tt1375666.json">Inception (2010)</a></li>
+    </ul>
+  `);
+});
 
+// --- MANIFEST (za Stremio + Render Health Check) ---
+app.get("/manifest.json", (req, res) => {
+  res.json({
+    id: "org.formio.podnapisi",
+    version: "8.0.4",
+    name: "Formio Podnapisi.NET 🇸🇮 (Regex Napad)",
+    description:
+      "Uporablja iskanje po IMDb ID-ju, pri neuspehu preklopi na robusten Regex Fallback.",
+    logo: "https://www.podnapisi.net/favicon.ico",
+    types: ["movie", "series"],
+    resources: ["subtitles"],
+    idPrefixes: ["tt"],
+  });
+});
+
+// --- TESTNI ENDPOINT ---
+app.get("/ping", (req, res) => {
+  res.json({ pong: true, time: new Date().toISOString() });
+});
+
+// --- ZAŽENI STREŽNIK ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
