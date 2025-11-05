@@ -13,9 +13,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "8.1.0",
+  version: "7.1.0",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Išče vse slovenske podnapise brez filtra, s prijavo in cache sistemom",
+  description: "Išče slovenske podnapise s prijavo, cache sistemom in varnostnim popravilom.",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -29,16 +29,37 @@ const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
-if (!fs.existsSync(CACHE_FILE)) fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
 
-const langMap = { sl: "🇸🇮" };
-
+// 🧠 Varnostno nalaganje in shranjevanje cache-a
 function loadCache() {
-  try { return JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); }
-  catch { return {}; }
+  try {
+    if (!fs.existsSync(CACHE_FILE)) {
+      console.log("📁 Cache ne obstaja — ustvarjam nov...");
+      fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
+      return {};
+    }
+
+    const data = fs.readFileSync(CACHE_FILE, "utf8");
+    if (!data.trim()) {
+      console.log("⚠️ Cache prazen — ustvarjam nov...");
+      fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
+      return {};
+    }
+
+    return JSON.parse(data);
+  } catch (err) {
+    console.log("⚠️ Poškodovan cache — ponastavljam:", err.message);
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({}, null, 2));
+    return {};
+  }
 }
+
 function saveCache(cache) {
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+  } catch (err) {
+    console.log("⚠️ Napaka pri shranjevanju cache-a:", err.message);
+  }
 }
 
 let globalBrowser = null;
@@ -68,19 +89,35 @@ async function ensureLoggedIn(page) {
   await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise(r => setTimeout(r, 4000));
 
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  if (bodyText.includes("Odjava") || bodyText.includes("Moj profil")) {
+    console.log("✅ Uporabnik že prijavljen.");
+    globalCookiesLoaded = true;
+    return;
+  }
+
   try {
     await page.waitForSelector("input[name='username']", { timeout: 30000 });
-    await page.type("input[name='username']", USERNAME, { delay: 25 });
-    await page.type("input[name='password']", PASSWORD, { delay: 25 });
-    const loginBtn = await page.$("form[action*='login'] button") || await page.$("form[action*='login'] input[type='submit']");
-    await loginBtn.click();
+  } catch {
+    throw new Error("⚠️ Polje za uporabniško ime se ni pojavilo – morda CAPTCHA.");
+  }
+
+  await page.type("input[name='username']", USERNAME, { delay: 25 });
+  await page.type("input[name='password']", PASSWORD, { delay: 25 });
+
+  const loginBtn = (await page.$("form[action*='login'] button")) ||
+                   (await page.$("form[action*='login'] input[type='submit']"));
+  if (!loginBtn) throw new Error("⚠️ Gumb za prijavo ni bil najden.");
+  await loginBtn.click();
+
+  try {
     await page.waitForFunction(
       () => document.body.innerText.includes("Odjava") || document.body.innerText.includes("Moj profil"),
       { timeout: 30000 }
     );
     console.log("✅ Prijava uspešna.");
   } catch {
-    console.log("⚠️ Prijava ni potrjena (morda CAPTCHA ali počasno nalaganje).");
+    console.log("⚠️ Prijava ni potrjena (morda počasno nalaganje).");
   }
 
   const cookies = await page.cookies();
@@ -89,49 +126,42 @@ async function ensureLoggedIn(page) {
   console.log("💾 Piškotki shranjeni.");
 }
 
-async function getTitleAndYear(imdbId) {
+// 🎬 IMDb → naslov (brez letnice)
+async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
     if (data?.Title) {
       console.log(`🎬 IMDb → ${data.Title} (${data.Year})`);
-      return { title: data.Title.trim(), year: data.Year || "" };
+      return data.Title.trim();
     }
   } catch {
     console.log("⚠️ Napaka IMDb API");
   }
-  return { title: imdbId, year: "" };
+  return imdbId;
 }
 
-async function fetchSubtitlesForLang(browser, title, langCode) {
+// 🔎 Iskanje slovenskih podnapisov
+async function fetchSubtitles(browser, title) {
   const page = await browser.newPage();
-  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${langCode}`;
-  console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
+  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
+  console.log(`🌍 Iščem 🇸🇮: ${searchUrl}`);
 
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise(r => setTimeout(r, 2500));
 
-  let results = [];
-  try {
-    results = await page.$$eval("table.table tbody tr", (rows) =>
-      rows.map((row) => {
-        const link = row.querySelector("a[href*='/download']")?.href;
-        const title = row.querySelector("a[href*='/download']")?.innerText?.trim() || "Neznan";
-        return link ? { link, title } : null;
-      }).filter(Boolean)
-    );
-  } catch {
-    console.log("⚠️ Fallback: regex parse");
-    const html = await page.content();
-    const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      results.push({ link: "https://www.podnapisi.net" + match[1], title: match[2].trim() });
-    }
+  const html = await page.content();
+  const results = [];
+  const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const link = "https://www.podnapisi.net" + match[1];
+    const name = match[2].trim();
+    results.push({ link, name });
   }
 
-  console.log(`✅ Najdenih ${results.length} (${langCode})`);
-  return results.map((r, i) => ({ ...r, lang: langCode, index: i + 1 }));
+  console.log(`✅ Najdenih ${results.length} 🇸🇮 podnapisov.`);
+  return results;
 }
 
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
@@ -145,43 +175,38 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
     return res.json({ subtitles: cache[imdbId].data });
   }
 
-  const { title } = await getTitleAndYear(imdbId);
+  const title = await getTitleFromIMDb(imdbId);
   const browser = await getBrowser();
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
-  const slResults = await fetchSubtitlesForLang(browser, title, "sl");
-  if (!slResults.length) {
+  const results = await fetchSubtitles(browser, title);
+  if (!results.length) {
     console.log(`❌ Ni bilo najdenih slovenskih podnapisov za ${title}`);
     return res.json({ subtitles: [] });
   }
 
   const subtitles = [];
   let idx = 1;
-
-  for (const r of slResults) {
-    const downloadLink = r.link;
-    const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
-    const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
-    const flag = langMap[r.lang] || "🌐";
-
+  for (const r of results) {
     try {
-      const zipRes = await fetch(downloadLink);
+      const zipRes = await fetch(r.link);
       const buf = Buffer.from(await zipRes.arrayBuffer());
+      const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
+      const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
       fs.writeFileSync(zipPath, buf);
 
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(extractDir, true);
-
-      const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
+      const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
       if (srtFile) {
         subtitles.push({
           id: `formio-podnapisi-${idx}`,
           url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${idx}/${encodeURIComponent(srtFile)}`,
-          lang: r.lang,
-          name: `${flag} ${r.title}`
+          lang: "sl",
+          name: `🇸🇮 ${r.name}`
         });
-        console.log(`📜 [${r.lang}] ${srtFile}`);
+        console.log(`📜 Najden SRT: ${srtFile}`);
         idx++;
       }
     } catch (err) {
@@ -205,7 +230,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (brez filtra, vse slovenske datoteke)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (varen cache + prijava + regex iskanje)");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
