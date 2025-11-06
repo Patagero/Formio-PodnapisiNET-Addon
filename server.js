@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
 import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
+import puppeteer from "puppeteer";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -12,21 +12,19 @@ app.use(cors({ origin: "*", methods: ["GET"] }));
 const PODNAPISI_USER = "patagero";
 const PODNAPISI_PASS = "Formio1978";
 
-// 🔧 Chromium launcher, 100% Render-safe
+// 🔧 Chromium launcher
 async function getBrowser() {
-  const executablePath = await chromium.executablePath();
-  console.log(`🧠 Chromium zagnan iz: ${executablePath}`);
-
+  const path = await chromium.executablePath();
+  console.log(`🧠 Chromium zagnan iz: ${path}`);
   return await puppeteer.launch({
     args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath,
+    executablePath: path,
     headless: chromium.headless,
     ignoreHTTPSErrors: true
   });
 }
 
-// 🎬 Iskanje slovenskih podnapisov
+// 🔎 Scraper
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
   const browser = await getBrowser();
@@ -48,18 +46,17 @@ async function scrapeSubtitlesByTitle(title) {
     await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
     await page.waitForSelector(".subtitle-entry", { timeout: 8000 }).catch(() => {});
-    const subtitles = await page.$$eval(".subtitle-entry", nodes =>
-      nodes.map(el => ({
+    const subtitles = await page.$$eval(".subtitle-entry", els =>
+      els.map(el => ({
         title: el.querySelector(".release")?.innerText?.trim(),
         link: el.querySelector("a")?.href
       }))
     );
 
-    const slSubs = subtitles.filter(s => s?.title);
-    console.log(`✅ Najdenih ${slSubs.length} slovenskih podnapisov`);
+    console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov`);
 
     const final = [];
-    for (const s of slSubs) {
+    for (const s of subtitles) {
       try {
         const res = await fetch(s.link);
         const html = await res.text();
@@ -78,13 +75,13 @@ async function scrapeSubtitlesByTitle(title) {
   }
 }
 
-// 📜 Manifest za Stremio
+// 📜 Manifest
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "9.8.0",
+    version: "9.9.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe, puppeteer-core build)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, puppeteer 21.6.1)",
     types: ["movie"],
     resources: [{
       name: "subtitles",
@@ -99,7 +96,7 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-// 🎬 Endpoint za iskanje
+// 🎬 Endpoint
 app.get("/subtitles/movie/:title.json", async (req, res) => {
   const { title } = req.params;
   const results = await scrapeSubtitlesByTitle(title);
@@ -109,9 +106,9 @@ app.get("/subtitles/movie/:title.json", async (req, res) => {
 // 🔁 Root redirect
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
-// 🚀 Zagon
+// 🚀 Start
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.8.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.9.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
