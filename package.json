@@ -1,16 +1,16 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "9.7.4",
+  "version": "9.7.6",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "postinstall": "rm -rf node_modules/puppeteer-core"
+    "start": "node server.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^119.0.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "node-fetch": "3.3.2",
-    "puppeteer": "^22.11.0"
+    "puppeteer": "^22.11.0",
+    "puppeteer-core": "^22.11.0"
   }
 }
