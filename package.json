@@ -1,9 +1,7 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "9.6.0",
-  "description": "Render-safe Stremio addon za slovenske podnapise s portala Podnapisi.NET",
+  "version": "9.6.1",
   "type": "module",
-  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
@@ -12,10 +10,6 @@
     "express": "^4.19.2",
     "node-fetch": "3.3.2",
     "puppeteer-core": "22.15.0",
-    "path": "^0.12.7",
-    "fs": "^0.0.1-security"
-  },
-  "engines": {
-    "node": "22.11.0"
+    "cors": "^2.8.5"
   }
 }
