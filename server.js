@@ -1,6 +1,6 @@
 // ==================================================
-//  Formio Podnapisi.NET 🇸🇮  –  V9.0.0
-//  Samodejna prijava + iskanje slovenskih podnapisov
+//  Formio Podnapisi.NET 🇸🇮  –  V9.1.0
+//  Išče po naslovu (ne po IMDb ID-ju)
 // ==================================================
 
 import express from "express";
@@ -58,21 +58,21 @@ async function loginToPodnapisi() {
 }
 
 // --------------------------------------------------
-// 🔍 Iskanje slovenskih podnapisov
+// 🔍 Išči po nazivu (npr. "Titanic")
 // --------------------------------------------------
-async function scrapeSubtitles(imdbId) {
-  console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
+async function scrapeSubtitlesByTitle(title) {
+  console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
 
   const session = await loginToPodnapisi();
   if (!session) return [];
 
   const { browser, page } = session;
 
-  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(imdbId)}&language=sl`;
-  console.log("🔎 Iskanje slovenskih podnapisov:", searchUrl);
+  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
+  console.log("🔎 Iskanje:", searchUrl);
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
-  // 📄 Poišči vse zadetke v HTML
+  // 📄 Poišči vse zadetke
   const subtitles = await page.evaluate(() => {
     const rows = document.querySelectorAll("tr.subtitle-entry");
     const results = [];
@@ -99,12 +99,12 @@ async function scrapeSubtitles(imdbId) {
 }
 
 // --------------------------------------------------
-// 🌐 Endpoint za Stremio ali test
+// 🌐 Endpoint: išči po naslovu
 // --------------------------------------------------
-app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
+app.get("/subtitles/:type/:title.json", async (req, res) => {
   try {
-    const { imdbId } = req.params;
-    const subs = await scrapeSubtitles(imdbId);
+    const { title } = req.params;
+    const subs = await scrapeSubtitlesByTitle(title);
     res.json({ subtitles: subs });
   } catch (err) {
     console.error("❌ Napaka endpoint:", err.message);
@@ -116,16 +116,16 @@ app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
 // Manifest in root
 // --------------------------------------------------
 app.get("/", (req, res) => {
-  res.send(`<h2>✅ Formio Podnapisi.NET 🇸🇮 V9.0.0</h2>
+  res.send(`<h2>✅ Formio Podnapisi.NET 🇸🇮 V9.1.0</h2>
     <p>Manifest: <a href="/manifest.json">/manifest.json</a></p>`);
 });
 
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
-    version: "9.0.0",
+    version: "9.1.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskanje in prenos slovenskih podnapisov s podnapisi.net (avtomatska prijava).",
+    description: "Iskanje slovenskih podnapisov po naslovu (avtomatska prijava).",
     types: ["movie", "series"],
     resources: ["subtitles"],
     idPrefixes: ["tt"],
@@ -138,6 +138,6 @@ app.get("/manifest.json", (req, res) => {
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.0.0 zagnan na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.1.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
