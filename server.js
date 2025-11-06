@@ -1,5 +1,5 @@
 // ==================================================
-// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.4 – stabilna verzija z večkratnim iskanjem)
+// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.5 – stabilna verzija z boljšim parserjem)
 // ==================================================
 import express from "express";
 import fetch from "node-fetch";
@@ -43,7 +43,7 @@ async function scrapeSubtitlesByTitle(title) {
 
     const page = await browser.newPage();
 
-    // 🔐 Prijava v podnapisi.net
+    // 🔐 Prijava
     console.log("🔐 Prijava v podnapisi.net ...");
     await page.goto("https://www.podnapisi.net/sl/users/login", { waitUntil: "networkidle2" });
     await page.type("#username", USERNAME);
@@ -52,36 +52,56 @@ async function scrapeSubtitlesByTitle(title) {
     await page.waitForTimeout(2500);
     console.log("✅ Prijava uspešna");
 
-    // 🔎 Iskanje
+    // 🔎 Iskanje po naslovu
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
     console.log(`🌍 Iskanje: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: "networkidle2" });
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+    console.log("⏳ Čakam na rezultate iskanja ...");
 
-    // ⚙️ Dinamični parser
-    await page.waitForSelector(".media, .subtitle-entry, .card, .table, .results, .container", {
-      timeout: 10000
-    }).catch(() => console.warn("⚠️ Elementi niso bili pravočasno naloženi – nadaljujem."));
+    // ✅ počakamo do 15s, da se rezultati res naložijo
+    try {
+      await page.waitForFunction(
+        () => document.querySelectorAll("a[href*='/sl/subtitles/']").length > 0,
+        { timeout: 15000 }
+      );
+      console.log("📄 Rezultati naloženi, zajemam HTML ...");
+    } catch {
+      console.warn("⚠️ Rezultati niso bili vidni v 15 sekundah — poskušam vseeno.");
+    }
 
+    // ⚙️ Parser (nova struktura)
     const subtitles = await page.evaluate(() => {
       const results = [];
-      const blocks = document.querySelectorAll(".media, .subtitle-entry, .media-body, .card, tr, .results .row");
+      const selectors = [
+        ".media",
+        ".subtitle-entry",
+        ".card",
+        ".list-group-item",
+        ".search-results",
+        "tr"
+      ];
+
+      const blocks = document.querySelectorAll(selectors.join(", "));
       blocks.forEach(el => {
-        const titleEl =
+        const linkEl =
           el.querySelector("a[href*='/sl/subtitles/']") ||
           el.querySelector(".media-heading a, .subtitle-entry__title a, .media-body a");
-        const title = titleEl?.innerText?.trim() || null;
-        const link = titleEl?.href || null;
-        const year = el.querySelector("small, .year, .subtitle-entry__year")?.innerText?.trim() || null;
+
+        const title = linkEl?.innerText?.trim() || null;
+        const link = linkEl?.href || null;
+        const year =
+          el.querySelector(".year, .subtitle-entry__year, small")?.innerText?.trim() || null;
+
         if (title && link && title.length > 1) results.push({ title, link, year });
       });
 
+      // če nič ne najde, poberi vse /sl/subtitles/
       if (results.length === 0) {
-        document.querySelectorAll("a").forEach(a => {
-          if (a.href.includes("/sl/subtitles/")) {
-            results.push({ title: a.innerText.trim(), link: a.href });
-          }
+        document.querySelectorAll("a[href*='/sl/subtitles/']").forEach(a => {
+          results.push({ title: a.innerText.trim(), link: a.href });
         });
       }
+
       return results;
     });
 
@@ -102,7 +122,7 @@ async function scrapeSubtitlesByTitle(title) {
 
     console.log(`🧩 Po filtriranju ostane ${finalList.length} 🇸🇮 relevantnih podnapisov.`);
 
-    // 📦 Prenos ZIP povezav
+    // 📦 Poiščemo ZIP povezave
     for (const s of finalList) {
       try {
         const res = await fetch(s.link);
@@ -119,7 +139,7 @@ async function scrapeSubtitlesByTitle(title) {
 
     await browser.close();
     globalThis.activeBrowser = null;
-    await new Promise(r => setTimeout(r, 1000)); // pavza za stabilnost
+    await new Promise(r => setTimeout(r, 1000)); // pavza
     return finalList;
   } catch (err) {
     console.error("❌ Napaka pri scrapanju:", err);
@@ -135,9 +155,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "10.0.4",
+    version: "10.0.5",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe, stabilna večkratna verzija)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, čaka na rezultate)",
     types: ["movie"],
     resources: [{ name: "subtitles", types: ["movie"], idPrefixes: ["tt"] }],
     catalogs: [],
