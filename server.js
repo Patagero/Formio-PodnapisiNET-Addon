@@ -1,5 +1,5 @@
 // ==================================================
-// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.0, združena verzija z iskanjem + filtrom)
+// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.1, združena verzija z iskanjem + filtrom + auto test)
 // ==================================================
 import express from "express";
 import fetch from "node-fetch";
@@ -14,10 +14,12 @@ const PORT = process.env.PORT || 10000;
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// 🧩 Pomožne funkcije
+// 🔧 pomožna funkcija
 const normalize = s => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
-// 🔍 Glavna funkcija za iskanje podnapisov po imenu
+// ==================================================
+// 🔍 Scraper – prijava, iskanje, prenos ZIP
+// ==================================================
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
 
@@ -57,7 +59,7 @@ async function scrapeSubtitlesByTitle(title) {
 
     console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov`);
 
-    // 🔎 Filtiranje rezultatov (mehko ujemanje po imenu)
+    // 🔎 Filtiranje po naslovu
     const normTitle = normalize(title);
     const filtered = subtitles.filter(s => {
       const t = normalize(s.title);
@@ -96,13 +98,15 @@ async function scrapeSubtitlesByTitle(title) {
   }
 }
 
-// 📜 Manifest route za Stremio
+// ==================================================
+// 📜 Manifest za Stremio
+// ==================================================
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "10.0.0",
+    version: "10.0.1",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov s portala Podnapisi.NET",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, z auto testom)",
     types: ["movie"],
     resources: [
       {
@@ -116,7 +120,9 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
+// ==================================================
 // 🎬 Endpoint za iskanje podnapisov po imenu filma
+// ==================================================
 app.get("/subtitles/movie/:query.json", async (req, res) => {
   const query = req.params.query.replace(/tt\d+/, "").trim();
   try {
@@ -128,15 +134,42 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
   }
 });
 
-// 🔁 Root redirect
+// ==================================================
+// 🔁 Root redirect na manifest
+// ==================================================
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
-// 💤 Keep-alive ping (Render ne zaspi)
+// ==================================================
+// 🧪 Samodejni test ob zagonu (preveri Puppeteer)
+// ==================================================
+(async () => {
+  try {
+    console.log("🧪 Preverjam Puppeteer zagnanost...");
+    const browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+    const page = await browser.newPage();
+    await page.goto("https://www.podnapisi.net/sl", { waitUntil: "domcontentloaded" });
+    console.log("🧪 Puppeteer deluje — povezava uspešna.");
+    await browser.close();
+  } catch (err) {
+    console.error("❌ Puppeteer test ni uspel:", err.message);
+  }
+})();
+
+// ==================================================
+// 💤 Keep-alive ping
+// ==================================================
 setInterval(() => {
   fetch(`https://formio-podnapisinet-addon-1.onrender.com/manifest.json`).catch(() => {});
 }, 10 * 60 * 1000);
 
+// ==================================================
 // 🧠 Zagon strežnika
+// ==================================================
 app.listen(PORT, () => {
   console.log("==================================================");
   console.log(`✅ Formio Podnapisi.NET 🇸🇮 združena verzija posluša na portu ${PORT}`);
