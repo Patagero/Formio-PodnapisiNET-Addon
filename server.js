@@ -1,5 +1,5 @@
 // ==================================================
-// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.2 – posodobljen parser podnapisi.net)
+// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.3 – dinamični parser + prijava + ZIP)
 // ==================================================
 import express from "express";
 import fetch from "node-fetch";
@@ -14,11 +14,10 @@ const PORT = process.env.PORT || 10000;
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// 🔧 pomožna funkcija
 const normalize = s => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 // ==================================================
-// 🔍 Scraper – prijava, iskanje, prenos ZIP
+// 🔍 Scraper
 // ==================================================
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
@@ -49,19 +48,39 @@ async function scrapeSubtitlesByTitle(title) {
     console.log(`🌍 Iskanje: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
-    // ⚙️ Novi parser – podpira nove in stare razrede
+    // ⚙️ Dinamični parser – podpira nove in stare strukture
+    await page.waitForSelector(".media, .subtitle-entry, .card, .table, .results, .container", {
+      timeout: 10000
+    }).catch(() => console.warn("⚠️ Elementi niso bili pravočasno naloženi – nadaljujem."));
+
     const subtitles = await page.evaluate(() => {
       const results = [];
-      document.querySelectorAll(".media, .subtitle-entry, .media-body").forEach(el => {
+
+      const blocks = document.querySelectorAll(
+        ".media, .subtitle-entry, .media-body, .card, tr, .results .row"
+      );
+
+      blocks.forEach(el => {
         const titleEl =
-          el.querySelector(".media-heading a, .subtitle-entry__title a, .media-body a") ||
-          el.querySelector("a");
+          el.querySelector("a[href*='/sl/subtitles/']") ||
+          el.querySelector(".media-heading a, .subtitle-entry__title a, .media-body a");
         const title = titleEl?.innerText?.trim() || null;
-        const link = el.querySelector('a[href*="/sl/subtitles/"]')?.href || null;
+        const link = titleEl?.href || null;
         const year =
-          el.querySelector(".media-heading small, .subtitle-entry__year")?.innerText?.trim() || null;
-        if (title && link) results.push({ title, link, year });
+          el.querySelector("small, .year, .subtitle-entry__year")?.innerText?.trim() || null;
+
+        if (title && link && title.length > 1) results.push({ title, link, year });
       });
+
+      // fallback: če nič ne najde, zajemi vse linke do /sl/subtitles/
+      if (results.length === 0) {
+        document.querySelectorAll("a").forEach(a => {
+          if (a.href.includes("/sl/subtitles/")) {
+            results.push({ title: a.innerText.trim(), link: a.href });
+          }
+        });
+      }
+
       return results;
     });
 
@@ -112,9 +131,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "10.0.2",
+    version: "10.0.3",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe, nov parser)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, dinamični parser)",
     types: ["movie"],
     resources: [
       {
@@ -129,7 +148,7 @@ app.get("/manifest.json", (req, res) => {
 });
 
 // ==================================================
-// 🎬 Endpoint za iskanje podnapisov po imenu filma
+// 🎬 Endpoint za iskanje podnapisov
 // ==================================================
 app.get("/subtitles/movie/:query.json", async (req, res) => {
   const query = req.params.query.replace(/tt\d+/, "").trim();
@@ -143,12 +162,12 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
 });
 
 // ==================================================
-// 🔁 Root redirect na manifest
+// 🔁 Root redirect
 // ==================================================
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
 // ==================================================
-// 🧪 Samodejni test ob zagonu (preveri Puppeteer)
+// 🧪 Test Puppeteer
 // ==================================================
 (async () => {
   try {
@@ -169,14 +188,7 @@ app.get("/", (req, res) => res.redirect("/manifest.json"));
 })();
 
 // ==================================================
-// 💤 Keep-alive ping
-// ==================================================
-setInterval(() => {
-  fetch(`https://formio-podnapisinet-addon-1.onrender.com/manifest.json`).catch(() => {});
-}, 10 * 60 * 1000);
-
-// ==================================================
-// 🧠 Zagon strežnika
+// 🧠 Server listen
 // ==================================================
 app.listen(PORT, () => {
   console.log("==================================================");
