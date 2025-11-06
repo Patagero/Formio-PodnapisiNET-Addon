@@ -1,5 +1,5 @@
 // ==================================================
-// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.1, združena verzija z iskanjem + filtrom + auto test)
+// ✅ Formio Podnapisi.NET 🇸🇮 (v10.0.2 – posodobljen parser podnapisi.net)
 // ==================================================
 import express from "express";
 import fetch from "node-fetch";
@@ -49,12 +49,20 @@ async function scrapeSubtitlesByTitle(title) {
     console.log(`🌍 Iskanje: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
+    // ⚙️ Novi parser – podpira nove in stare razrede
     const subtitles = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll(".subtitle-entry")).map(el => ({
-        title: el.querySelector(".subtitle-entry__title")?.innerText.trim(),
-        link: el.querySelector("a.subtitle-entry__download")?.href,
-        year: el.querySelector(".subtitle-entry__year")?.innerText.trim(),
-      }));
+      const results = [];
+      document.querySelectorAll(".media, .subtitle-entry, .media-body").forEach(el => {
+        const titleEl =
+          el.querySelector(".media-heading a, .subtitle-entry__title a, .media-body a") ||
+          el.querySelector("a");
+        const title = titleEl?.innerText?.trim() || null;
+        const link = el.querySelector('a[href*="/sl/subtitles/"]')?.href || null;
+        const year =
+          el.querySelector(".media-heading small, .subtitle-entry__year")?.innerText?.trim() || null;
+        if (title && link) results.push({ title, link, year });
+      });
+      return results;
     });
 
     console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov`);
@@ -104,9 +112,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "10.0.1",
+    version: "10.0.2",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe, z auto testom)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, nov parser)",
     types: ["movie"],
     resources: [
       {
