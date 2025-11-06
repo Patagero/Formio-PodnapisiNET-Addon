@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium-min";
+import chromium from "@sparticuz/chromium";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -13,7 +13,7 @@ app.use(cors({
   methods: ["GET"]
 }));
 
-// 🔐 Podnapisi.net prijava
+// 🔐 Prijava v podnapisi.net
 const PODNAPISI_USER = "patagero";
 const PODNAPISI_PASS = "Formio1978";
 
@@ -42,13 +42,13 @@ async function scrapeSubtitlesByTitle(title) {
     ]);
     console.log("✅ Prijava uspešna");
 
-    // Iskanje po naslovu (ne ID)
+    // Iskanje po naslovu
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
     console.log(`🔎 Iskanje: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
     // Počakaj, da se prikažejo rezultati
-    await page.waitForSelector(".subtitle-entry", { timeout: 5000 }).catch(() => {});
+    await page.waitForSelector(".subtitle-entry", { timeout: 6000 }).catch(() => {});
     const subtitles = await page.$$eval(".subtitle-entry", nodes => nodes.map(n => ({
       title: n.querySelector(".release")?.innerText?.trim(),
       link: n.querySelector("a")?.href,
@@ -72,6 +72,7 @@ async function scrapeSubtitlesByTitle(title) {
 
       const finalSubs = zipLinks.filter(z => z && z.zip);
       console.log(`✅ Končan scraping – ${finalSubs.length} ZIP povezav`);
+      await browser.close();
       return finalSubs;
     }
 
@@ -88,9 +89,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "9.6.1",
+    version: "9.7.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, Chromium fix)",
     types: ["movie"],
     resources: [{
       name: "subtitles",
@@ -123,6 +124,6 @@ app.get("/", (req, res) => res.redirect("/manifest.json"));
 // 🚀 Zagon
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.6.1 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.7.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
