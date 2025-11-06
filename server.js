@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import puppeteer from "puppeteer-core";
+import puppeteer from "puppeteer";
 import chromium from "@sparticuz/chromium";
 
 const app = express();
@@ -24,14 +24,14 @@ async function scrapeSubtitlesByTitle(title) {
   const browser = await puppeteer.launch({
     args: chromium.args,
     defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
+    executablePath: await chromium.executablePath(), // Render-safe pot
     headless: chromium.headless,
   });
 
   const page = await browser.newPage();
 
   try {
-    // Prijava
+    // 🔐 Prijava
     console.log("🔐 Prijava v podnapisi.net ...");
     await page.goto("https://www.podnapisi.net/sl/users/sign_in", { waitUntil: "networkidle2" });
     await page.type("#user_username", PODNAPISI_USER);
@@ -42,12 +42,12 @@ async function scrapeSubtitlesByTitle(title) {
     ]);
     console.log("✅ Prijava uspešna");
 
-    // Iskanje po naslovu
+    // 🔎 Iskanje po naslovu
     const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
     console.log(`🔎 Iskanje: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "networkidle2" });
 
-    // Počakaj, da se prikažejo rezultati
+    // ⏳ Počakaj, da se prikažejo rezultati
     await page.waitForSelector(".subtitle-entry", { timeout: 6000 }).catch(() => {});
     const subtitles = await page.$$eval(".subtitle-entry", nodes => nodes.map(n => ({
       title: n.querySelector(".release")?.innerText?.trim(),
@@ -89,9 +89,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "formio.podnapisinet",
-    version: "9.7.0",
+    version: "9.7.1",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskalnik slovenskih podnapisov (Render-safe, Chromium fix)",
+    description: "Iskalnik slovenskih podnapisov (Render-safe, polni Puppeteer)",
     types: ["movie"],
     resources: [{
       name: "subtitles",
@@ -124,6 +124,6 @@ app.get("/", (req, res) => res.redirect("/manifest.json"));
 // 🚀 Zagon
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.7.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.7.1 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
