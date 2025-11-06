@@ -1,22 +1,17 @@
 // ==================================================
-//  Formio Podnapisi.NET 🇸🇮  –  V9.1.0
-//  Išče po naslovu (ne po IMDb ID-ju)
+//  Formio Podnapisi.NET 🇸🇮  –  V9.2.0
+//  Samodejno prevede IMDb ID v naslov in išče po imenu
 // ==================================================
 
 import express from "express";
 import cors from "cors";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
-import path from "path";
-import fs from "fs";
-import os from "os";
+import fetch from "node-fetch";
 
 const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
-
-const TMP_DIR = path.join(os.tmpdir(), "formio_podnapisi");
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 // --------------------------------------------------
 // 🔐 Prijava v podnapisi.net
@@ -58,7 +53,27 @@ async function loginToPodnapisi() {
 }
 
 // --------------------------------------------------
-// 🔍 Išči po nazivu (npr. "Titanic")
+// 🎞️ IMDb → Title pretvorba
+// --------------------------------------------------
+async function imdbToTitle(query) {
+  if (!/^tt\d{6,}$/.test(query)) return query; // če ni IMDb ID, vrni kar je
+
+  try {
+    const url = `https://www.omdbapi.com/?i=${query}&apikey=564727fa`; // brezplačni OMDb API ključ
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data && data.Title) {
+      console.log(`🎬 IMDb → Naslov: ${data.Title}`);
+      return data.Title;
+    }
+  } catch (err) {
+    console.warn("⚠️ IMDb API ni uspel:", err.message);
+  }
+  return query; // fallback
+}
+
+// --------------------------------------------------
+// 🔍 Iskanje po naslovu
 // --------------------------------------------------
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
@@ -72,7 +87,7 @@ async function scrapeSubtitlesByTitle(title) {
   console.log("🔎 Iskanje:", searchUrl);
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
-  // 📄 Poišči vse zadetke
+  // 📄 Preberi rezultate
   const subtitles = await page.evaluate(() => {
     const rows = document.querySelectorAll("tr.subtitle-entry");
     const results = [];
@@ -99,13 +114,14 @@ async function scrapeSubtitlesByTitle(title) {
 }
 
 // --------------------------------------------------
-// 🌐 Endpoint: išči po naslovu
+// 🌐 Endpoint: /subtitles/:type/:query.json
 // --------------------------------------------------
-app.get("/subtitles/:type/:title.json", async (req, res) => {
+app.get("/subtitles/:type/:query.json", async (req, res) => {
   try {
-    const { title } = req.params;
+    const { query } = req.params;
+    const title = await imdbToTitle(query);
     const subs = await scrapeSubtitlesByTitle(title);
-    res.json({ subtitles: subs });
+    res.json({ title, subtitles: subs });
   } catch (err) {
     console.error("❌ Napaka endpoint:", err.message);
     res.status(500).json({ error: "scrape_failed" });
@@ -113,19 +129,19 @@ app.get("/subtitles/:type/:title.json", async (req, res) => {
 });
 
 // --------------------------------------------------
-// Manifest in root
+// Manifest + root
 // --------------------------------------------------
 app.get("/", (req, res) => {
-  res.send(`<h2>✅ Formio Podnapisi.NET 🇸🇮 V9.1.0</h2>
+  res.send(`<h2>✅ Formio Podnapisi.NET 🇸🇮 V9.2.0</h2>
     <p>Manifest: <a href="/manifest.json">/manifest.json</a></p>`);
 });
 
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
-    version: "9.1.0",
+    version: "9.2.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Iskanje slovenskih podnapisov po naslovu (avtomatska prijava).",
+    description: "Iskanje slovenskih podnapisov po imenu (avtomatska prijava + IMDb pretvorba).",
     types: ["movie", "series"],
     resources: ["subtitles"],
     idPrefixes: ["tt"],
@@ -138,6 +154,6 @@ app.get("/manifest.json", (req, res) => {
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.1.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 V9.2.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
