@@ -1,17 +1,21 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "10.1.2",
-  "description": "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
+  "version": "6.3.3",
+  "description": "Formio Podnapisi.NET 🇸🇮 - iskalnik slovenskih podnapisov s prijavo",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^119.0.0",
-    "puppeteer-core": "^21.3.8",
     "express": "^4.18.2",
+    "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
-    "lru-cache": "^10.2.0"
+    "@sparticuz/chromium": "^125.0.0",
+    "puppeteer-core": "^22.11.0",
+    "adm-zip": "^0.5.10"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
