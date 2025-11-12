@@ -5,13 +5,11 @@ import fetch from "node-fetch";
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(express.json());
-
-// 📜 Manifest route
+// 📜 Manifest za Stremio
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "10.0.8",
+    version: "10.1.0",
     name: "Formio Podnapisi.NET 🇸🇮",
     description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
     types: ["movie"],
@@ -30,7 +28,7 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-// 🎬 Endpoint za iskanje podnapisov
+// 🎬 Endpoint za iskanje slovenskih podnapisov
 app.get("/subtitles/movie/:query.json", async (req, res) => {
   const query = req.params.query;
   console.log(`🎬 Iskanje slovenskih podnapisov za: ${query}`);
@@ -60,40 +58,46 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
       return Array.from(document.querySelectorAll(".subtitle-entry")).map((el) => ({
         title: el.querySelector(".release")?.innerText?.trim() || "Neznan",
         lang: el.querySelector(".flags img")?.alt || "unknown",
-        link: el.querySelector("a[href*='/sl/subtitles/']")?.href || null,
+        download: el.querySelector("a[href*='/sl/subtitles/']")?.href || null,
       }));
     });
 
     const slSubtitles = subtitles.filter(
-      (s) => s.lang.toLowerCase().includes("sloven") && s.link
+      (s) => s.lang.toLowerCase().includes("sloven") && s.download
     );
 
     console.log(`✅ Najdenih ${slSubtitles.length} slovenskih podnapisov`);
     await browser.close();
     res.json(slSubtitles);
   } catch (err) {
-    console.error("❌ Napaka pri obdelavi:", err);
+    console.error("❌ Napaka pri obdelavi:", err.message);
     res.json({ error: "scrape_failed", message: err.message });
   }
 });
 
-// 🔁 Root redirect
+// 🔁 Root redirect na manifest
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
-// 🧠 Keep-alive ping (da Render ne zaspi)
-setInterval(async () => {
+// 💓 Keep-alive ping (Render prevent sleep)
+async function keepAlive() {
+  const url = "https://formio-podnapisinet-addon-1.onrender.com/manifest.json";
   try {
-    const url = `https://formio-podnapisinet-addon-1.onrender.com/manifest.json`;
-    const ping = await fetch(url);
-    console.log(`💓 Keep-alive ping (${ping.status})`);
+    const response = await fetch(url);
+    console.log(`💓 Keep-alive ping (${response.status})`);
   } catch (e) {
     console.log("⚠️ Keep-alive ping failed:", e.message);
   }
-}, 5 * 60 * 1000); // vsakih 5 minut
+}
 
-// 🚀 Start server
+// 🔄 Ping vsake 5 min
+setInterval(keepAlive, 5 * 60 * 1000);
+
+// 🚀 Ping tudi takoj po zagonu
+setTimeout(keepAlive, 10 * 1000);
+
+// ✅ Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.0.8 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.1.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
