@@ -1,18 +1,79 @@
 import express from "express";
-import fetch from "node-fetch";
-import puppeteer from "puppeteer";
 import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
+import fetch from "node-fetch";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ===============================
+// 🔐 Podnapisi.net prijavni podatki
+const PODNAPISI_USER = "patagero";
+const PODNAPISI_PASS = "Formio1978";
+
+// 📦 Glavna funkcija za iskanje slovenskih podnapisov
+async function scrapeSubtitlesByTitle(title) {
+  console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
+
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
+    defaultViewport: chromium.defaultViewport,
+  });
+
+  const page = await browser.newPage();
+  await page.setDefaultNavigationTimeout(40000);
+
+  try {
+    // 🔐 Prijava
+    console.log("🔐 Prijava v podnapisi.net ...");
+    await page.goto("https://www.podnapisi.net/sl/login", { waitUntil: "domcontentloaded" });
+    await page.type('input[name="username"]', PODNAPISI_USER, { delay: 50 });
+    await page.type('input[name="password"]', PODNAPISI_PASS, { delay: 50 });
+    await Promise.all([
+      page.click('button[type="submit"]'),
+      page.waitForNavigation({ waitUntil: "networkidle0", timeout: 30000 }),
+    ]);
+    console.log("✅ Prijava uspešna");
+
+    // 🔎 Iskanje
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
+    console.log(`🌍 Iskanje: ${searchUrl}`);
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+
+    // 📄 Počakamo, da se rezultati naložijo
+    try {
+      await page.waitForSelector(".subtitle-entry", { timeout: 8000 });
+    } catch {
+      console.log("⚠️ Elementi niso bili pravočasno naloženi – nadaljujem.");
+    }
+
+    const subtitles = await page.$$eval(".subtitle-entry", (rows) =>
+      rows.map((r) => {
+        const name = r.querySelector(".release")?.textContent?.trim() || "Neznan";
+        const link = r.querySelector("a[href*='/sl/subtitles/']")?.href || null;
+        const lang = r.querySelector(".language")?.textContent?.trim() || "";
+        return { name, link, lang };
+      })
+    );
+
+    const slSubs = subtitles.filter((s) => s.lang.toLowerCase().includes("slovenski"));
+    console.log(`✅ Najdenih ${slSubs.length} slovenskih podnapisov`);
+
+    await browser.close();
+    return slSubs.length > 0 ? slSubs : [];
+  } catch (err) {
+    console.error("❌ Napaka pri scrapanju:", err);
+    await browser.close();
+    return [];
+  }
+}
+
 // 📜 Manifest za Stremio
-// ===============================
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "10.1.0",
+    version: "10.1.2",
     name: "Formio Podnapisi.NET 🇸🇮",
     description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
     types: ["movie"],
@@ -31,123 +92,40 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-// 🔁 Root preusmeri na manifest
-app.get("/", (req, res) => res.redirect("/manifest.json"));
-
-// ===============================
-// 🎬 Glavna funkcija: Scrapanje podnapisov
-// ===============================
-async function scrapeSubtitlesByTitle(title) {
-  console.log(`🎬 Iskanje slovenskih podnapisov za: ${title}`);
-
-  const browser = await puppeteer.launch({
-    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-  });
-
-  const page = await browser.newPage();
-
-  try {
-    console.log("🔐 Prijava v podnapisi.net ...");
-    await page.goto("https://www.podnapisi.net/sl/login", { waitUntil: "networkidle2" });
-    await page.type("#username", "patagero");
-    await page.type("#password", "Formio1978");
-    await Promise.all([
-      page.click('button[type="submit"]'),
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }),
-    ]);
-    console.log("✅ Prijava uspešna");
-
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
-    console.log("🌍 Iskanje:", searchUrl);
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-
-    await page.waitForSelector(".subtitle-entry", { timeout: 10000 }).catch(() =>
-      console.log("⚠️ Elementi niso bili pravočasno naloženi – nadaljujem.")
-    );
-
-    const subtitles = await page.evaluate(() => {
-      const subs = [];
-      document.querySelectorAll(".subtitle-entry").forEach((el) => {
-        const name = el.querySelector(".release")?.innerText?.trim() || "Neznan";
-        const link = el.querySelector("a")?.href || null;
-        if (name && link) subs.push({ name, link });
-      });
-      return subs;
-    });
-
-    console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov`);
-
-    const slSubs = subtitles.filter((s) => s.name.toLowerCase().includes(title.toLowerCase()));
-    console.log(`🧩 Po filtriranju ostane ${slSubs.length} 🇸🇮 relevantnih podnapisov.`);
-
-    await browser.close();
-    return slSubs;
-  } catch (err) {
-    console.error("❌ Napaka pri iskanju podnapisov:", err.message);
-    await browser.close();
-    return [];
-  }
-}
-
-// ===============================
-// 🎬 API endpoint za Stremio (subtitles)
-// ===============================
+// 🎬 Endpoint za iskanje podnapisov po naslovu
 app.get("/subtitles/movie/:query.json", async (req, res) => {
   const query = req.params.query;
-  console.log(`🎬 Prejemam zahtevo za IMDb: ${query}`);
+  console.log(`🎬 Prejemam zahtevo za: ${query}`);
 
-  // Če pride IMDb ID (ttXXXX), ga pretvorimo v naslov
-  let movieTitle = query;
-  if (query.startsWith("tt")) {
-    const omdbKey = "6d8fef5c"; // lahko zamenjaš z lastnim OMDb ključem
-    const omdbUrl = `https://www.omdbapi.com/?i=${query}&apikey=${omdbKey}`;
-    try {
-      const data = await fetch(omdbUrl).then((r) => r.json());
-      if (data?.Title) {
-        movieTitle = data.Title;
-        console.log(`🎬 IMDb → ${movieTitle} (${data.Year})`);
-      }
-    } catch (e) {
-      console.log("⚠️ Napaka pri iskanju naslova iz IMDb ID");
-    }
-  }
-
-  const results = await scrapeSubtitlesByTitle(movieTitle);
-
-  if (!results.length) {
-    return res.json([]);
-  }
-
-  const stremioSubs = results.map((s, i) => ({
-    id: `podnapisi-${i}`,
-    url: s.link,
-    lang: "slv",
-    name: s.name,
-  }));
-
-  res.json(stremioSubs);
-});
-
-// ===============================
-// 🩺 Health endpoint
-// ===============================
-app.get("/health", async (req, res) => {
   try {
-    const executable = await chromium.executablePath();
-    res.json({ status: "ok", chromium: executable ? "ready" : "missing" });
-  } catch {
-    res.json({ status: "error", chromium: "not found" });
+    const subtitles = await scrapeSubtitlesByTitle(query);
+    if (!subtitles || subtitles.length === 0) {
+      res.json({ subtitles: [] });
+    } else {
+      res.json({
+        subtitles: subtitles.map((s) => ({
+          id: s.link,
+          lang: "sl",
+          url: s.link,
+          name: s.name,
+        })),
+      });
+    }
+  } catch (err) {
+    console.error("❌ Napaka pri obdelavi zahteve:", err);
+    res.json({ subtitles: [] });
   }
 });
 
-// ===============================
-// 🚀 Zagon strežnika
-// ===============================
+// 🩺 Health check
+app.get("/health", (_, res) => res.send("✅ OK"));
+
+// 🔁 Root preusmeri na manifest
+app.get("/", (_, res) => res.redirect("/manifest.json"));
+
+// 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.1.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.1.2 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
