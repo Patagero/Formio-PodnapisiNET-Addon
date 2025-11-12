@@ -4,7 +4,8 @@ import puppeteer from "puppeteer-core";
 import fetch from "node-fetch";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+// ⬇️ Pomembno: uporabi točen Render port, ne statičnega
+const PORT = process.env.PORT;
 
 // 🔐 Podnapisi.net prijavni podatki
 const PODNAPISI_USER = "patagero";
@@ -41,7 +42,6 @@ async function scrapeSubtitlesByTitle(title) {
     console.log(`🌍 Iskanje: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
 
-    // 📄 Počakamo, da se rezultati naložijo
     try {
       await page.waitForSelector(".subtitle-entry", { timeout: 8000 });
     } catch {
@@ -73,7 +73,7 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "10.1.2",
+    version: "10.1.3",
     name: "Formio Podnapisi.NET 🇸🇮",
     description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
     types: ["movie"],
@@ -81,14 +81,14 @@ app.get("/manifest.json", (req, res) => {
       {
         name: "subtitles",
         types: ["movie"],
-        idPrefixes: ["tt"],
-      },
+        idPrefixes: ["tt"]
+      }
     ],
     catalogs: [],
     behaviorHints: {
       configurable: false,
-      configurationRequired: false,
-    },
+      configurationRequired: false
+    }
   });
 });
 
@@ -99,18 +99,14 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
 
   try {
     const subtitles = await scrapeSubtitlesByTitle(query);
-    if (!subtitles || subtitles.length === 0) {
-      res.json({ subtitles: [] });
-    } else {
-      res.json({
-        subtitles: subtitles.map((s) => ({
-          id: s.link,
-          lang: "sl",
-          url: s.link,
-          name: s.name,
-        })),
-      });
-    }
+    res.json({
+      subtitles: subtitles.map((s) => ({
+        id: s.link,
+        lang: "sl",
+        url: s.link,
+        name: s.name
+      }))
+    });
   } catch (err) {
     console.error("❌ Napaka pri obdelavi zahteve:", err);
     res.json({ subtitles: [] });
@@ -120,12 +116,12 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
 // 🩺 Health check
 app.get("/health", (_, res) => res.send("✅ OK"));
 
-// 🔁 Root preusmeri na manifest
+// 🔁 Root → manifest
 app.get("/", (_, res) => res.redirect("/manifest.json"));
 
-// 🚀 Zaženi strežnik
+// 🚀 Start
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.1.2 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v10.1.3 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
