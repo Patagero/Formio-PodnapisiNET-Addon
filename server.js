@@ -17,14 +17,14 @@ app.get("/manifest.json", (req, res) => {
       {
         name: "subtitles",
         types: ["movie"],
-        idPrefixes: ["tt"],
-      },
+        idPrefixes: ["tt"]
+      }
     ],
     catalogs: [],
     behaviorHints: {
       configurable: false,
-      configurationRequired: false,
-    },
+      configurationRequired: false
+    }
   });
 });
 
@@ -36,7 +36,7 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
   try {
     const browser = await puppeteer.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
     const page = await browser.newPage();
 
@@ -46,7 +46,7 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
     await page.type("#password", "Formio1978");
     await Promise.all([
       page.click("button[type=submit]"),
-      page.waitForNavigation({ waitUntil: "networkidle2" }),
+      page.waitForNavigation({ waitUntil: "networkidle2" })
     ]);
     console.log("✅ Prijava uspešna");
 
@@ -58,7 +58,7 @@ app.get("/subtitles/movie/:query.json", async (req, res) => {
       return Array.from(document.querySelectorAll(".subtitle-entry")).map((el) => ({
         title: el.querySelector(".release")?.innerText?.trim() || "Neznan",
         lang: el.querySelector(".flags img")?.alt || "unknown",
-        download: el.querySelector("a[href*='/sl/subtitles/']")?.href || null,
+        download: el.querySelector("a[href*='/sl/subtitles/']")?.href || null
       }));
     });
 
@@ -91,7 +91,6 @@ async function keepAlive() {
 
 // 🔄 Ping vsake 5 min
 setInterval(keepAlive, 5 * 60 * 1000);
-
 // 🚀 Ping tudi takoj po zagonu
 setTimeout(keepAlive, 10 * 1000);
 

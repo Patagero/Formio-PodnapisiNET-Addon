@@ -1,18 +1,18 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "10.0.7",
-  "description": "Iskalnik slovenskih podnapisov s portala Podnapisi.NET (Render-safe, Puppeteer)",
-  "type": "module",
+  "version": "10.1.0",
+  "description": "Samodejni iskalnik slovenskih podnapisov (Render-safe Puppeteer build)",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "puppeteer": "^22.7.1",
+    "express": "^4.18.2",
+    "puppeteer": "21.3.8",
     "node-fetch": "^3.3.2"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18 <23"
   }
 }
