@@ -1,7 +1,17 @@
-"dependencies": {
-  "@sparticuz/chromium": "^119.0.0",
-  "puppeteer-core": "^21.3.8",
-  "express": "^4.18.2",
-  "node-fetch": "^3.3.2",
-  "lru-cache": "^10.2.0"
+{
+  "name": "formio-podnapisinet-addon",
+  "version": "10.1.2",
+  "description": "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^119.0.0",
+    "puppeteer-core": "^21.3.8",
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "lru-cache": "^10.2.0"
+  }
 }
