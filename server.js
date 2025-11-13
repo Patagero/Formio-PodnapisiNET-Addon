@@ -95,7 +95,8 @@ async function fastSearchSubtitles(title) {
 }
 
 // 🎬 Endpoint za Stremio iskanje podnapisov
-app.get("/subtitles/movie/:imdbId.json", async (req, res) => {
+app.get(["/subtitles/movie/:imdbId.json", "/subtitles/:imdbId.json", "/subtitles/movie/:imdbId"], async (req, res) => {
+
   const imdbId = req.params.imdbId;
   console.log("==================================================");
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
