@@ -15,7 +15,7 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 
-// 🔐 Podnapisi.net prijavni podatki
+// 🔐 Prijavni podatki
 const PODNAPISI_USER = "patagero";
 const PODNAPISI_PASS = "Formio1978";
 
@@ -37,13 +37,13 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ⚡ Hibridna prijava (Puppeteer + API)
+// ⚡ Hibridna prijava + API
 async function fastSearchSubtitles(title) {
   console.log(`🌍 Hibridni login + API poizvedba za: ${title}`);
   const apiUrl = `https://www.podnapisi.net/api/subtitles?keywords=${encodeURIComponent(title)}&language=sl`;
 
   try {
-    // 🔐 Pridobimo cookieje, če jih še nimamo
+    // 🔐 Pridobi piškotke, če jih še ni
     if (!cachedCookies) {
       console.log("🔐 Pridobivam sveže piškotke iz prijave ...");
       const browser = await puppeteer.launch({
@@ -52,23 +52,59 @@ async function fastSearchSubtitles(title) {
         headless: chromium.headless,
       });
       const page = await browser.newPage();
-      await page.goto("https://www.podnapisi.net/sl/login", { waitUntil: "domcontentloaded" });
 
-      await page.type('input[name="username"]', PODNAPISI_USER, { delay: 40 });
-      await page.type('input[name="password"]', PODNAPISI_PASS, { delay: 40 });
-      await Promise.all([
-        page.click('button[type="submit"]'),
-        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }),
-      ]);
+      await page.goto("https://www.podnapisi.net/sl/login", {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
+
+      // 🔍 Dinamično poišči input polja
+      const inputs = await page.$$eval("input", (els) =>
+        els.map((e) => ({
+          name: e.name || e.id || "",
+          type: e.type || "",
+        }))
+      );
+
+      const userSelector =
+        inputs.find((i) => /user/i.test(i.name) || i.type === "text")?.name ||
+        "input[type='text']";
+      const passSelector =
+        inputs.find((i) => /pass/i.test(i.name))?.name ||
+        "input[type='password']";
+
+      console.log(`🧩 Uporabljam selectorje: ${userSelector}, ${passSelector}`);
+
+      // 🔑 Vnesi prijavo
+      await page.type(`[name='${userSelector}'], #${userSelector}`, PODNAPISI_USER, { delay: 40 }).catch(() => {});
+      await page.type(`[name='${passSelector}'], #${passSelector}`, PODNAPISI_PASS, { delay: 40 }).catch(() => {});
+
+      // 🖱 Klik na prvi submit gumb
+      const button = await page.$("button[type='submit'], input[type='submit']");
+      if (button) {
+        await Promise.all([
+          button.click(),
+          page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }),
+        ]);
+      } else {
+        console.log("⚠️ Gumb za prijavo ni bil najden, nadaljujem.");
+      }
+
+      const bodyText = await page.evaluate(() => document.body.innerText);
+      if (bodyText.includes("Odjava") || bodyText.includes("Moj profil")) {
+        console.log("✅ Prijava uspešna.");
+      } else {
+        console.log("⚠️ Prijava ni potrjena (morda CAPTCHA ali redirect).");
+      }
 
       cachedCookies = await page.cookies();
       await browser.close();
-      console.log("✅ Piškotki pridobljeni in shranjeni v RAM.");
+      console.log("💾 Piškotki pridobljeni in shranjeni v RAM.");
     }
 
     const cookieHeader = cachedCookies.map((c) => `${c.name}=${c.value}`).join("; ");
 
-    // 🔎 API poizvedba z avtoriziranimi cookieji
+    // 🔎 API poizvedba z avtorizacijo
     const apiRes = await fetch(apiUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0",
@@ -108,10 +144,9 @@ async function fastSearchSubtitles(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "13.0.0",
+    version: "13.1.0",
     name: "Formio Podnapisi.NET 🇸🇮 FAST",
-    description:
-      "Bliskoviti iskalnik slovenskih podnapisov (API + prijava, brez CAPTCHA)",
+    description: "Hiter iskalnik slovenskih podnapisov (API + prijava)",
     types: ["movie", "series"],
     resources: [
       { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -121,7 +156,7 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-// 🎬 Endpoint za Stremio subtitles
+// 🎬 Endpoint za iskanje po imenu
 app.get(
   [
     "/subtitles/movie/:imdbId.json",
@@ -148,6 +183,7 @@ app.get(
         .replace(/\s+/g, " ")
         .trim();
 
+      // počisti ime
       rawName = rawName.replace(
         /\b(2160p|1080p|720p|480p|4k|uhd|hdr|hdr10|hevc|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|remastered|uhd|bd|ai_upscale)\b/gi,
         ""
@@ -187,12 +223,12 @@ app.get(
 // 🩺 Health check
 app.get("/health", (_, res) => res.send("✅ OK"));
 
-// 🏁 Root preusmeri na manifest
+// 🏁 Root → manifest
 app.get("/", (_, res) => res.redirect("/manifest.json"));
 
-// 🚀 Zaženi strežnik
+// 🚀 Zagon
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 FAST v13.0.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 FAST v13.1.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
