@@ -18,23 +18,24 @@ const PORT = process.env.PORT || 10000;
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "11.5.0",
+    version: "11.6.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
+    description:
+      "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET (izboljšano iskanje)",
     logo: "https://www.podnapisi.net/favicon.ico",
     resources: [
       {
         name: "subtitles",
         types: ["movie", "series"],
-        idPrefixes: ["tt"]
-      }
+        idPrefixes: ["tt"],
+      },
     ],
     types: ["movie", "series"],
     catalogs: [],
     behaviorHints: {
       configurable: false,
-      configurationRequired: false
-    }
+      configurationRequired: false,
+    },
   });
 });
 
@@ -53,9 +54,11 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ⚡ IZBOLJŠANA FUNKCIJA – 3-nivojsko iskanje (CSS, regex, tabela)
+// ⚡ IZBOLJŠANA FUNKCIJA – 4 nivoji (CSS, regex, tbody, zip/srt)
 async function fastSearchSubtitles(title) {
-  const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
+  const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(
+    title
+  )}&language=sl`;
   console.log(`🌍 Hitra poizvedba: ${url}`);
 
   const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -64,28 +67,23 @@ async function fastSearchSubtitles(title) {
 
   const subtitles = [];
 
-  // 🧭 Poskus 1: <article> struktura
-  $("article.subtitle-entry").each((_, el) => {
-    const name =
-      $(el).find(".release").text().trim() ||
-      $(el).find("h3").text().trim() ||
-      "Neznan";
-    const link =
-      $(el).find("a[href*='/sl/subtitles/']").attr("href") ||
-      $(el).find("a[href*='/download']").attr("href");
-    if (link) {
-      const fullLink = link.startsWith("http")
-        ? link
-        : "https://www.podnapisi.net" + link;
+  // 1️⃣ <a href> s /subtitles/ in /download
+  $("a[href*='/subtitles/']").each((_, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().trim() || "Neznan";
+    if (href && href.includes("/download")) {
+      const fullLink = href.startsWith("http")
+        ? href
+        : "https://www.podnapisi.net" + href;
       subtitles.push({ name, link: fullLink });
     }
   });
 
-  // 🧭 Poskus 2: regex parsing (če CSS ne najde nič)
+  // 2️⃣ Regex fallback
   if (subtitles.length === 0) {
-    console.log("⚠️ CSS selector parsing failed, fallback HTML parsing ...");
+    console.log("⚠️ CSS parsing ni vrnil rezultatov, preklapljam na regex ...");
     const regex =
-      /<a\s+href="(\/sl\/subtitles\/[^"]+\/download)"[^>]*>([^<]+)<\/a>/g;
+      /href="(\/sl\/subtitles\/[^"]*\/download)"[^>]*>([^<]+)<\/a>/gi;
     let match;
     while ((match = regex.exec(html)) !== null) {
       const name = match[2].trim();
@@ -94,9 +92,9 @@ async function fastSearchSubtitles(title) {
     }
   }
 
-  // 🧭 Poskus 3: fallback tabela (če še vedno nič)
+  // 3️⃣ <tbody> parsing
   if (subtitles.length === 0) {
-    $("table tbody tr").each((_, el) => {
+    $("tbody tr").each((_, el) => {
       const link = $(el).find("a[href*='/download']").attr("href");
       const name = $(el).find("a[href*='/download']").text().trim();
       if (link && name)
@@ -109,17 +107,29 @@ async function fastSearchSubtitles(title) {
     });
   }
 
-  console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov`);
+  // 4️⃣ .zip / .srt fallback
+  if (subtitles.length === 0) {
+    const deepRegex =
+      /href="(\/sl\/subtitles\/[^"]*(?:\.zip|\.srt)[^"]*)".*?>([^<]*)<\/a>/gi;
+    let m;
+    while ((m = deepRegex.exec(html)) !== null) {
+      const name = m[2].trim() || "Neznan";
+      const link = "https://www.podnapisi.net" + m[1];
+      subtitles.push({ name, link });
+    }
+  }
+
+  console.log(`✅ Najdenih ${subtitles.length} slovenskih podnapisov za: ${title}`);
   return subtitles;
 }
 
-// 🎬 Endpoint za Stremio subtitles (iskanje po imenu datoteke)
+// 🎬 Endpoint za Stremio subtitles
 app.get(
   [
     "/subtitles/movie/:imdbId.json",
     "/subtitles/:imdbId.json",
     "/subtitles/movie/:imdbId/*",
-    "/subtitles/:imdbId/*"
+    "/subtitles/:imdbId/*",
   ],
   async (req, res) => {
     console.log("==================================================");
@@ -133,7 +143,6 @@ app.get(
     const filenameMatch = decodeURIComponent(fullUrl).match(/filename=([^&]+)/);
     let searchTerm = null;
 
-    // 🧠 Čiščenje imena datoteke (brez številk, HDR, ipd.)
     if (filenameMatch && filenameMatch[1]) {
       let rawName = decodeURIComponent(filenameMatch[1])
         .replace(/\.[a-z0-9]{2,4}$/i, "")
@@ -142,7 +151,7 @@ app.get(
         .trim();
 
       rawName = rawName.replace(
-        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|h264|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered|uhd|bd|ai_upscale|ahq-?\d+)\b/gi,
+        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered|uhd|bd|ai_upscale|ahq-?\d+)\b/gi,
         ""
       );
 
@@ -189,6 +198,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.5.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.6.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
