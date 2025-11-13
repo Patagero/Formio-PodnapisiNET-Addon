@@ -7,23 +7,30 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 🧩 Logger – da vidimo če Stremio res kliče addon
+app.use((req, res, next) => {
+  console.log(`➡️  [${req.method}] ${req.url}`);
+  next();
+});
+
 const PORT = process.env.PORT || 10000;
 
 // 📜 Manifest za Stremio
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "11.1.0",
+    version: "11.2.0",
     name: "Formio Podnapisi.NET 🇸🇮",
-    description: "Hitra različica — išče slovenske podnapise s portala Podnapisi.NET",
-    types: ["movie"],
+    description: "Hitri iskalnik slovenskih podnapisov s portala Podnapisi.NET",
+    logo: "https://www.podnapisi.net/favicon.ico",
     resources: [
       {
         name: "subtitles",
-        types: ["movie"],
+        types: ["movie", "series"],
         idPrefixes: ["tt"]
       }
     ],
+    types: ["movie", "series"],
     catalogs: [],
     behaviorHints: {
       configurable: false,
@@ -47,7 +54,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ⚡ Hitro iskanje brez Puppeteerja (popravljeno za novo strukturo podnapisi.net)
+// ⚡ Hitra funkcija za iskanje slovenskih podnapisov brez Puppeteerja
 async function fastSearchSubtitles(title) {
   const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
   console.log(`🌍 Hitra poizvedba: ${url}`);
@@ -58,17 +65,15 @@ async function fastSearchSubtitles(title) {
 
   const subtitles = [];
 
-  // ✅ Nova struktura 2025 – <article class="subtitle-entry">
+  // 🔍 Nova struktura
   $("article.subtitle-entry").each((_, el) => {
     const name =
       $(el).find(".release").text().trim() ||
       $(el).find("h3").text().trim() ||
       "Neznan";
-
     const link =
       $(el).find("a[href*='/sl/subtitles/']").attr("href") ||
       $(el).find("a[href*='/download']").attr("href");
-
     if (link) {
       const fullLink = link.startsWith("http")
         ? link
@@ -77,7 +82,7 @@ async function fastSearchSubtitles(title) {
     }
   });
 
-  // 🧩 Fallback – če cheerio ne najde nič, uporabi regex
+  // 🧩 Fallback regex parsing (če cheerio ne ujame)
   if (subtitles.length === 0) {
     const regex =
       /<a\s+href="(\/sl\/subtitles\/[^"]+\/download)"[^>]*>([^<]+)<\/a>/g;
@@ -94,29 +99,36 @@ async function fastSearchSubtitles(title) {
   return subtitles;
 }
 
-// 🎬 Endpoint za Stremio iskanje podnapisov
-app.get(["/subtitles/movie/:imdbId.json", "/subtitles/:imdbId.json", "/subtitles/movie/:imdbId"], async (req, res) => {
+// 🎬 Endpoint za Stremio subtitles (pokrije vse oblike URL-jev)
+app.get(
+  [
+    "/subtitles/movie/:imdbId.json",
+    "/subtitles/:imdbId.json",
+    "/subtitles/movie/:imdbId",
+    "/subtitles/:imdbId",
+  ],
+  async (req, res) => {
+    const imdbId = req.params.imdbId;
+    console.log("==================================================");
+    console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
 
-  const imdbId = req.params.imdbId;
-  console.log("==================================================");
-  console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
+    const title = await getTitleFromIMDb(imdbId);
+    const results = await fastSearchSubtitles(title);
 
-  const title = await getTitleFromIMDb(imdbId);
-  const results = await fastSearchSubtitles(title);
+    if (!results.length) {
+      return res.json({ subtitles: [] });
+    }
 
-  if (!results.length) {
-    return res.json({ subtitles: [] });
+    const subtitles = results.map((r, i) => ({
+      id: `formio-${i + 1}`,
+      lang: "sl",
+      url: r.link,
+      name: `${r.name} 🇸🇮`,
+    }));
+
+    res.json({ subtitles });
   }
-
-  const subtitles = results.map((r, i) => ({
-    id: `formio-${i + 1}`,
-    lang: "sl",
-    url: r.link,
-    name: `${r.name} 🇸🇮`,
-  }));
-
-  res.json({ subtitles });
-});
+);
 
 // 🔁 Root preusmeri na manifest
 app.get("/", (_, res) => res.redirect("/manifest.json"));
@@ -124,6 +136,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.1.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.2.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
