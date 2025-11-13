@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 10000;
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "11.3.1",
+    version: "11.4.0",
     name: "Formio Podnapisi.NET 🇸🇮",
     description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
     logo: "https://www.podnapisi.net/favicon.ico",
@@ -117,25 +117,27 @@ app.get(
     const filenameMatch = decodeURIComponent(fullUrl).match(/filename=([^&]+)/);
     let searchTerm = null;
 
-    // ✅ POPRAVLJEN del: iskanje po imenu datoteke
+    // ✅ POPRAVLJEN del – popolno čiščenje imena datoteke
     if (filenameMatch && filenameMatch[1]) {
       let rawName = decodeURIComponent(filenameMatch[1])
         .replace(/\.[a-z0-9]{2,4}$/i, "")
-        .replace(/[\._]/g, " ")
+        .replace(/[\._\-]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
 
-      // 🔥 odstrani vse tehnične oznake
+      // 🧹 odstrani tehnične izraze
       rawName = rawName.replace(
-        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|h264|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered)\b/gi,
+        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|h264|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered|uhd|bd|ai_upscale|ahq-?\d+)\b/gi,
         ""
       );
 
-      // 🔢 odstrani številke (letnice in velikosti)
-      rawName = rawName.replace(/\b\d{3,4}\b/g, "");
+      // 🔢 odstrani vsa števila in ločila
+      rawName = rawName.replace(/[\d\-\+x]+/gi, " ");
 
       // 🧠 vzemi samo prve 2–3 besede kot naslov
-      const words = rawName.split(" ").filter((w) => w.length > 2);
+      const words = rawName
+        .split(" ")
+        .filter((w) => /^[A-Za-zčćžšđ]/i.test(w) && w.length > 2);
       const simpleName = words.slice(0, 3).join(" ").trim();
 
       searchTerm = simpleName || rawName || "Titanic";
@@ -175,6 +177,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.3.1 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.4.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
