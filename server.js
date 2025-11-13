@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
+import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
 
 const app = express();
 app.use(cors());
@@ -13,32 +15,14 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 
-// 📜 Manifest za Stremio
-app.get("/manifest.json", (req, res) => {
-  res.json({
-    id: "com.formio.podnapisinet",
-    version: "12.5.0",
-    name: "Formio Podnapisi.NET 🇸🇮",
-    description:
-      "Hitri iskalnik slovenskih podnapisov z direktnim API dostopom (avtorizacija included)",
-    logo: "https://www.podnapisi.net/favicon.ico",
-    resources: [
-      {
-        name: "subtitles",
-        types: ["movie", "series"],
-        idPrefixes: ["tt"],
-      },
-    ],
-    types: ["movie", "series"],
-    catalogs: [],
-    behaviorHints: {
-      configurable: false,
-      configurationRequired: false,
-    },
-  });
-});
+// 🔐 Podnapisi.net prijavni podatki
+const PODNAPISI_USER = "patagero";
+const PODNAPISI_PASS = "Formio1978";
 
-// 🎬 IMDb → naslov (če ni imena datoteke)
+// 🔁 Cache piškotkov
+let cachedCookies = null;
+
+// 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
@@ -53,40 +37,38 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ⚡ NOVA različica – login + API (brez Puppeteer)
+// ⚡ Hibridna prijava (Puppeteer + API)
 async function fastSearchSubtitles(title) {
-  console.log(`🌍 Prijava in API poizvedba za: ${title}`);
-
-  const loginUrl = "https://www.podnapisi.net/sl/login";
-  const apiUrl = `https://www.podnapisi.net/api/subtitles?keywords=${encodeURIComponent(
-    title
-  )}&language=sl`;
-
-  const loginData = new URLSearchParams();
-  loginData.append("username", "patagero");
-  loginData.append("password", "Formio1978");
+  console.log(`🌍 Hibridni login + API poizvedba za: ${title}`);
+  const apiUrl = `https://www.podnapisi.net/api/subtitles?keywords=${encodeURIComponent(title)}&language=sl`;
 
   try {
-    // 🔐 1️⃣ Login za piškotke
-    const loginRes = await fetch(loginUrl, {
-      method: "POST",
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      body: loginData.toString(),
-      redirect: "manual",
-    });
+    // 🔐 Pridobimo cookieje, če jih še nimamo
+    if (!cachedCookies) {
+      console.log("🔐 Pridobivam sveže piškotke iz prijave ...");
+      const browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+      });
+      const page = await browser.newPage();
+      await page.goto("https://www.podnapisi.net/sl/login", { waitUntil: "domcontentloaded" });
 
-    const cookies = loginRes.headers.raw()["set-cookie"];
-    if (!cookies) {
-      console.log("⚠️ Prijava ni vrnila cookiejev – preveri login.");
-      return [];
+      await page.type('input[name="username"]', PODNAPISI_USER, { delay: 40 });
+      await page.type('input[name="password"]', PODNAPISI_PASS, { delay: 40 });
+      await Promise.all([
+        page.click('button[type="submit"]'),
+        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }),
+      ]);
+
+      cachedCookies = await page.cookies();
+      await browser.close();
+      console.log("✅ Piškotki pridobljeni in shranjeni v RAM.");
     }
-    const cookieHeader = cookies.map((c) => c.split(";")[0]).join("; ");
 
-    // 🔎 2️⃣ API poizvedba z avtorizacijo
+    const cookieHeader = cachedCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+
+    // 🔎 API poizvedba z avtoriziranimi cookieji
     const apiRes = await fetch(apiUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0",
@@ -116,10 +98,28 @@ async function fastSearchSubtitles(title) {
     console.log(`✅ Najdenih ${subtitles.length} 🇸🇮 podnapisov za: ${title}`);
     return subtitles;
   } catch (err) {
-    console.error("❌ Napaka pri prijavi ali iskanju:", err.message);
+    console.error("❌ Napaka pri prijavi ali API klicu:", err.message);
+    cachedCookies = null;
     return [];
   }
 }
+
+// 📜 Manifest
+app.get("/manifest.json", (req, res) => {
+  res.json({
+    id: "com.formio.podnapisinet",
+    version: "13.0.0",
+    name: "Formio Podnapisi.NET 🇸🇮 FAST",
+    description:
+      "Bliskoviti iskalnik slovenskih podnapisov (API + prijava, brez CAPTCHA)",
+    types: ["movie", "series"],
+    resources: [
+      { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] },
+    ],
+    catalogs: [],
+    behaviorHints: { configurable: false, configurationRequired: false },
+  });
+});
 
 // 🎬 Endpoint za Stremio subtitles
 app.get(
@@ -131,14 +131,13 @@ app.get(
   ],
   async (req, res) => {
     console.log("==================================================");
-
     const imdbId = req.params.imdbId;
     const fullUrl = req.url;
 
     console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
     console.log(`🧩 Celoten URL: ${fullUrl}`);
 
-    // 🔍 Ugotovi iskalni niz iz imena datoteke
+    // 📂 Izlušči ime datoteke
     const filenameMatch = decodeURIComponent(fullUrl).match(/filename=([^&]+)/);
     let searchTerm = null;
 
@@ -150,17 +149,14 @@ app.get(
         .trim();
 
       rawName = rawName.replace(
-        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered|uhd|bd|ai_upscale|ahq-?\d+)\b/gi,
+        /\b(2160p|1080p|720p|480p|4k|uhd|hdr|hdr10|hevc|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|remastered|uhd|bd|ai_upscale)\b/gi,
         ""
       );
 
-      rawName = rawName.replace(/[\d\-\+x]+/gi, " ");
       const words = rawName
         .split(" ")
         .filter((w) => /^[A-Za-zčćžšđ]/i.test(w) && w.length > 2);
-      const simpleName = words.slice(0, 3).join(" ").trim();
-
-      searchTerm = simpleName || rawName || "Titanic";
+      searchTerm = words.slice(0, 3).join(" ").trim() || "Titanic";
       console.log(`🎯 Poenostavljeno ime za iskanje: ${searchTerm}`);
     }
 
@@ -191,12 +187,12 @@ app.get(
 // 🩺 Health check
 app.get("/health", (_, res) => res.send("✅ OK"));
 
-// 🔁 Root preusmeri na manifest
+// 🏁 Root preusmeri na manifest
 app.get("/", (_, res) => res.redirect("/manifest.json"));
 
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v12.5.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 FAST v13.0.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
