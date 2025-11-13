@@ -7,7 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🧩 Logger — vidimo vse Stremio zahteve
 app.use((req, res, next) => {
   console.log(`➡️  [${req.method}] ${req.url}`);
   next();
@@ -19,7 +18,7 @@ const PORT = process.env.PORT || 10000;
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "11.3.0",
+    version: "11.3.1",
     name: "Formio Podnapisi.NET 🇸🇮",
     description: "Samodejni iskalnik slovenskih podnapisov s portala Podnapisi.NET",
     logo: "https://www.podnapisi.net/favicon.ico",
@@ -81,7 +80,7 @@ async function fastSearchSubtitles(title) {
     }
   });
 
-  // 🧩 Fallback regex parsing (če cheerio ne ujame)
+  // 🧩 Fallback regex parsing
   if (subtitles.length === 0) {
     const regex =
       /<a\s+href="(\/sl\/subtitles\/[^"]+\/download)"[^>]*>([^<]+)<\/a>/g;
@@ -98,7 +97,7 @@ async function fastSearchSubtitles(title) {
   return subtitles;
 }
 
-// 🎬 Endpoint za Stremio subtitles (ujame vse oblike + filename iskanje)
+// 🎬 Endpoint za Stremio subtitles (z iskanjem po imenu datoteke)
 app.get(
   [
     "/subtitles/movie/:imdbId.json",
@@ -115,21 +114,34 @@ app.get(
     console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
     console.log(`🧩 Celoten URL: ${fullUrl}`);
 
-    // 📂 Izluščimo filename iz query dela
     const filenameMatch = decodeURIComponent(fullUrl).match(/filename=([^&]+)/);
     let searchTerm = null;
 
+    // ✅ POPRAVLJEN del: iskanje po imenu datoteke
     if (filenameMatch && filenameMatch[1]) {
-      searchTerm = filenameMatch[1]
+      let rawName = decodeURIComponent(filenameMatch[1])
         .replace(/\.[a-z0-9]{2,4}$/i, "")
         .replace(/[\._]/g, " ")
         .replace(/\s+/g, " ")
-        .replace(/2160p|1080p|720p|bluray|remux|uhd|hdr|dts|x264|x265|hevc|dvdrip|brrip/gi, "")
         .trim();
-      console.log(`📂 Iščem po imenu datoteke: ${searchTerm}`);
+
+      // 🔥 odstrani vse tehnične oznake
+      rawName = rawName.replace(
+        /\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|hevc|h264|x264|x265|dvdrip|brrip|remux|bluray|webrip|web-dl|rip|dts|aac|atmos|5\.1|7\.1|truehd|avc|ai|upscale|final|repack|proper|extended|edition|cd\d+|part\d+|slo|slv|ahq|sd|sdr|remastered)\b/gi,
+        ""
+      );
+
+      // 🔢 odstrani številke (letnice in velikosti)
+      rawName = rawName.replace(/\b\d{3,4}\b/g, "");
+
+      // 🧠 vzemi samo prve 2–3 besede kot naslov
+      const words = rawName.split(" ").filter((w) => w.length > 2);
+      const simpleName = words.slice(0, 3).join(" ").trim();
+
+      searchTerm = simpleName || rawName || "Titanic";
+      console.log(`🎯 Poenostavljeno ime za iskanje: ${searchTerm}`);
     }
 
-    // Če filename ni prisoten, iščemo po IMDb naslovu
     if (!searchTerm) {
       searchTerm = await getTitleFromIMDb(imdbId);
       console.log(`🎬 Iščem po IMDb naslovu: ${searchTerm}`);
@@ -154,12 +166,15 @@ app.get(
   }
 );
 
+// 🩺 Health check
+app.get("/health", (_, res) => res.send("✅ OK"));
+
 // 🔁 Root preusmeri na manifest
 app.get("/", (_, res) => res.redirect("/manifest.json"));
 
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.3.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v11.3.1 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
