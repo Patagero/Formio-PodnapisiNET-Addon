@@ -103,7 +103,6 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// blokiraj slike/css/fonts
 async function setupPageFast(page) {
   await page.setRequestInterception(true);
   page.on("request", (req) => {
@@ -113,7 +112,51 @@ async function setupPageFast(page) {
   });
 }
 
-// prenesi in razpakiraj datoteko
+// ✅ POPRAVLJENA različica funkcije fetchSubtitlesForLang
+async function fetchSubtitlesForLang(browser, title, langCode) {
+  const page = await browser.newPage();
+  await setupPageFast(page);
+
+  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${langCode}`;
+  console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+  let results = [];
+  try {
+    await page.waitForSelector(".subtitle-entry", { timeout: 15000 });
+  } catch {
+    console.log("⚠️ Elementi niso pravočasno naloženi – zajemam HTML ročno.");
+  }
+
+  const html = await page.content();
+
+  try {
+    results = await page.$$eval(".subtitle-entry", (rows) =>
+      rows.map((r) => ({
+        link: r.querySelector("a[href*='/download']")?.href || null,
+        title: r.querySelector(".release")?.textContent?.trim() || "Neznan",
+        lang: langCode
+      })).filter((r) => r.link)
+    );
+  } catch {
+    console.log("⚠️ CSS selector parsing failed, fallback HTML parsing ...");
+  }
+
+  // 🔁 fallback regex parser, če CSS ne uspe
+  if (results.length === 0) {
+    const regex = /href="(https:\/\/www\.podnapisi\.net\/sl\/subtitles\/[^"]*\/download)"[^>]*>([^<]+)/g;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      results.push({ link: match[1], title: match[2].trim(), lang: langCode });
+    }
+  }
+
+  await page.close();
+  console.log(`✅ Najdenih ${results.length} (${langCode})`);
+  return results;
+}
+
+// Prenos in razpakiranje ZIP ali SRT
 async function robustDownloadAndExtract(downloadUrl, imdbId, idx) {
   const zipPath = path.join(TMP_DIR, `${imdbId}_${idx}.zip`);
   const extractDir = path.join(TMP_DIR, `${imdbId}_${idx}`);
@@ -124,7 +167,6 @@ async function robustDownloadAndExtract(downloadUrl, imdbId, idx) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const buf = Buffer.from(await res.arrayBuffer());
-    // če ni ZIP, poskusi zapis kot srt
     if (buf.toString("utf8", 0, 200).includes("00:")) {
       const outPath = path.join(extractDir, `subtitle_${idx}.srt`);
       fs.writeFileSync(outPath, buf);
@@ -138,37 +180,9 @@ async function robustDownloadAndExtract(downloadUrl, imdbId, idx) {
     const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
     if (srtFile) return { ok: true, srt: path.join(extractDir, srtFile) };
     return { ok: false, error: "No SRT in ZIP" };
-
   } catch (err) {
     return { ok: false, error: err.message };
   }
-}
-
-async function fetchSubtitlesForLang(browser, title, langCode) {
-  const page = await browser.newPage();
-  await setupPageFast(page);
-
-  const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=${langCode}`;
-  console.log(`🌍 Iščem (${langCode}): ${searchUrl}`);
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-  let results = [];
-  try {
-    await page.waitForSelector(".subtitle-entry", { timeout: 8000 });
-    results = await page.$$eval(".subtitle-entry", rows =>
-      rows.map(r => ({
-        link: r.querySelector("a[href*='/download']")?.href || null,
-        title: r.querySelector(".release")?.textContent?.trim() || "Neznan",
-        lang: langCode
-      })).filter(r => r.link)
-    );
-  } catch {
-    console.log("⚠️ Elementi niso pravočasno naloženi.");
-  }
-
-  await page.close();
-  console.log(`✅ Najdenih ${results.length} (${langCode})`);
-  return results;
 }
 
 const limit = pLimit(DOWNLOAD_CONCURRENCY);
@@ -194,7 +208,9 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   if (!slResults.length) return res.json({ subtitles: [] });
 
   const downloads = await Promise.allSettled(
-    slResults.slice(0, 20).map((r, i) => limit(() => robustDownloadAndExtract(r.link, imdbId, i + 1).then(out => ({ r, out }))))
+    slResults.slice(0, 20).map((r, i) => limit(() =>
+      robustDownloadAndExtract(r.link, imdbId, i + 1).then(out => ({ r, out }))
+    ))
   );
 
   const subtitles = [];
@@ -226,9 +242,9 @@ app.get("/files/:id/:file", (req, res) => {
 
 app.get("/manifest.json", (req, res) => res.json({
   id: "com.formio.podnapisinet",
-  version: "10.2.0",
+  version: "10.2.1",
   name: "Formio Podnapisi.NET 🇸🇮",
-  description: "Hiter in stabilen iskalnik slovenskih podnapisov (Render-optimized)",
+  description: "Iskalnik slovenskih podnapisov (daljši timeout + fallback HTML parsing)",
   types: ["movie"],
   resources: [{ name: "subtitles", types: ["movie"], idPrefixes: ["tt"] }],
   catalogs: [],
@@ -240,6 +256,6 @@ app.get("/health", (_, res) => res.send("✅ OK"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Render Optimized posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 posluša na portu ${PORT} (razširjen timeout + fallback)`);
   console.log("==================================================");
 });
