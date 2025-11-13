@@ -17,10 +17,10 @@ const PORT = process.env.PORT || 10000;
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "12.0.0",
+    version: "12.5.0",
     name: "Formio Podnapisi.NET 🇸🇮",
     description:
-      "Bliskoviti iskalnik slovenskih podnapisov (direktni API z Podnapisi.NET)",
+      "Hitri iskalnik slovenskih podnapisov z direktnim API dostopom (avtorizacija included)",
     logo: "https://www.podnapisi.net/favicon.ico",
     resources: [
       {
@@ -53,35 +53,61 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// ⚡ NOVA funkcija – uporabi uradni JSON API od Podnapisi.NET
+// ⚡ NOVA različica – login + API (brez Puppeteer)
 async function fastSearchSubtitles(title) {
+  console.log(`🌍 Prijava in API poizvedba za: ${title}`);
+
+  const loginUrl = "https://www.podnapisi.net/sl/login";
   const apiUrl = `https://www.podnapisi.net/api/subtitles?keywords=${encodeURIComponent(
     title
   )}&language=sl`;
 
-  console.log(`🌍 API poizvedba: ${apiUrl}`);
+  const loginData = new URLSearchParams();
+  loginData.append("username", "patagero");
+  loginData.append("password", "Formio1978");
 
   try {
-    const res = await fetch(apiUrl, {
+    // 🔐 1️⃣ Login za piškotke
+    const loginRes = await fetch(loginUrl, {
+      method: "POST",
       headers: {
         "User-Agent": "Mozilla/5.0",
-        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+      body: loginData.toString(),
+      redirect: "manual",
+    });
+
+    const cookies = loginRes.headers.raw()["set-cookie"];
+    if (!cookies) {
+      console.log("⚠️ Prijava ni vrnila cookiejev – preveri login.");
+      return [];
+    }
+    const cookieHeader = cookies.map((c) => c.split(";")[0]).join("; ");
+
+    // 🔎 2️⃣ API poizvedba z avtorizacijo
+    const apiRes = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Cookie": cookieHeader,
       },
     });
 
-    if (!res.ok) {
-      console.log(`⚠️ Napaka API: ${res.status}`);
+    if (!apiRes.ok) {
+      console.log(`⚠️ API napaka: ${apiRes.status}`);
       return [];
     }
 
-    const json = await res.json();
+    const json = await apiRes.json();
     if (!json?.data || !Array.isArray(json.data)) {
-      console.log("⚠️ API ni vrnil veljavnih podatkov");
+      console.log("⚠️ API ni vrnil veljavnih rezultatov");
       return [];
     }
 
     const subtitles = json.data
-      .filter((sub) => sub.language && sub.language.slug === "sl")
+      .filter((sub) => sub.language?.slug === "sl")
       .map((sub) => ({
         name: sub.release || sub.title || "Neznan",
         link: `https://www.podnapisi.net${sub.url}`,
@@ -90,7 +116,7 @@ async function fastSearchSubtitles(title) {
     console.log(`✅ Najdenih ${subtitles.length} 🇸🇮 podnapisov za: ${title}`);
     return subtitles;
   } catch (err) {
-    console.error("❌ Napaka pri API klicu:", err.message);
+    console.error("❌ Napaka pri prijavi ali iskanju:", err.message);
     return [];
   }
 }
@@ -171,6 +197,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 // 🚀 Zaženi strežnik
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v12.0.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v12.5.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
