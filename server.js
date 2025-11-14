@@ -32,60 +32,94 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔐 Prijava (samo enkrat)
+// 🔐 Prijava (enkrat na zagon)
 async function ensureLogin() {
   if (cachedCookies) return cachedCookies;
 
-  console.log("🔐 Pridobivam nove piškotke ...");
+  console.log("🔐 Pridobivam nove piškotke (stealth mode) ...");
   const browser = await puppeteer.launch({
-    args: chromium.args,
+    args: [
+      ...chromium.args,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled"
+    ],
     executablePath: await chromium.executablePath(),
     headless: chromium.headless,
   });
+
   const page = await browser.newPage();
-  await page.goto("https://www.podnapisi.net/sl/login", { waitUntil: "domcontentloaded" });
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+  );
 
-  // Dinamični login
-  await page.waitForSelector("input[type='text'], input[name*='user']", { timeout: 10000 });
-  const textInputs = await page.$$("input[type='text'], input[name*='user']");
-  await textInputs[0].type(PODNAPISI_USER, { delay: 30 });
-  await page.type("input[type='password']", PODNAPISI_PASS, { delay: 30 });
-  await Promise.all([
-    page.click("button[type='submit'], input[type='submit']"),
-    page.waitForNavigation({ waitUntil: "networkidle0", timeout: 20000 }).catch(() => {}),
-  ]);
+  await page.goto("https://www.podnapisi.net/sl/login", {
+    waitUntil: "networkidle2",
+    timeout: 40000,
+  });
 
-  const bodyText = await page.evaluate(() => document.body.innerText);
-  if (bodyText.includes("Odjava") || bodyText.includes("Moj profil"))
+  await new Promise((r) => setTimeout(r, 3000));
+
+  // 🔍 Poišči polja za prijavo
+  const userSel = "input[name='username'], input[type='text']";
+  const passSel = "input[name='password']";
+
+  if (await page.$(userSel)) await page.type(userSel, PODNAPISI_USER, { delay: 30 });
+  if (await page.$(passSel)) await page.type(passSel, PODNAPISI_PASS, { delay: 30 });
+
+  const loginButton = await page.$("button[type='submit'], input[type='submit']");
+  if (loginButton) {
+    await Promise.all([
+      loginButton.click(),
+      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
+    ]);
+  }
+
+  const body = await page.evaluate(() => document.body.innerText);
+  if (body.includes("Odjava") || body.includes("Moj profil"))
     console.log("✅ Prijava uspešna.");
-  else console.log("⚠️ Prijava morda nepopolna.");
+  else console.log("⚠️ Prijava morda nepopolna (captcha ali redirect).");
 
   cachedCookies = await page.cookies();
   await browser.close();
+  console.log("💾 Piškotki shranjeni v RAM.");
   return cachedCookies;
 }
 
-// 🔍 Iskanje podnapisov po imenu (klasično)
+// 🔍 Iskanje podnapisov po imenu
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🌍 Iščem slovenske podnapise za: ${title}`);
   const browser = await puppeteer.launch({
-    args: chromium.args,
+    args: [
+      ...chromium.args,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled"
+    ],
     executablePath: await chromium.executablePath(),
     headless: chromium.headless,
   });
+
   const page = await browser.newPage();
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+  );
+  await page.setViewport({ width: 1366, height: 768 });
   const cookies = await ensureLogin();
   await page.setCookie(...cookies);
 
   const searchUrl = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 40000 });
+  await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 45000 });
+  await new Promise((r) => setTimeout(r, 2500));
 
   let results = [];
   try {
     await page.waitForSelector(".subtitle-entry, table.table tbody tr", { timeout: 8000 });
     results = await page.$$eval(".subtitle-entry, table.table tbody tr", (rows) =>
       rows.map((r) => {
-        const link = r.querySelector("a[href*='/download']")?.href || r.querySelector("a[href*='/subtitles/']")?.href;
+        const link =
+          r.querySelector("a[href*='/download']")?.href ||
+          r.querySelector("a[href*='/subtitles/']")?.href;
         const name = r.querySelector(".release, a")?.textContent?.trim() || "Neznan";
         const lang = r.innerText.toLowerCase().includes("slovenski") ? "sl" : "";
         return link && lang ? { name, link, lang } : null;
@@ -104,9 +138,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "13.2.0",
-    name: "Formio Podnapisi.NET 🇸🇮 Classic",
-    description: "Iskanje slovenskih podnapisov po imenu (brez API, s prijavo)",
+    version: "13.3.0",
+    name: "Formio Podnapisi.NET 🇸🇮 Stealth",
+    description: "Stabilno iskanje slovenskih podnapisov (stealth login, klasično iskanje)",
     types: ["movie", "series"],
     resources: [{ name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] }],
     catalogs: [],
@@ -159,6 +193,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Classic v13.2.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Stealth v13.3.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
