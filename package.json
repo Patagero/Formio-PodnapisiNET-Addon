@@ -1,6 +1,6 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "14.0.0",
+  "version": "15.0.0",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -11,8 +11,7 @@
     "puppeteer-core": "^23.5.3",
     "express": "^4.19.2",
     "cors": "^2.8.5",
-    "node-fetch": "^3.3.2",
-    "cheerio": "^1.0.0-rc.12"
+    "node-fetch": "^3.3.2"
   },
   "engines": {
     "node": ">=22.0.0"
