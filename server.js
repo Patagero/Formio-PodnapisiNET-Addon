@@ -32,7 +32,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔐 Prijava (enkrat na zagon)
+// 🔐 Prijava (stealth login, enkrat na zagon)
 async function ensureLogin() {
   if (cachedCookies) return cachedCookies;
 
@@ -42,7 +42,7 @@ async function ensureLogin() {
       ...chromium.args,
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled"
+      "--disable-blink-features=AutomationControlled",
     ],
     executablePath: await chromium.executablePath(),
     headless: chromium.headless,
@@ -60,7 +60,6 @@ async function ensureLogin() {
 
   await new Promise((r) => setTimeout(r, 3000));
 
-  // 🔍 Poišči polja za prijavo
   const userSel = "input[name='username'], input[type='text']";
   const passSel = "input[name='password']";
 
@@ -94,7 +93,7 @@ async function scrapeSubtitlesByTitle(title) {
       ...chromium.args,
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled"
+      "--disable-blink-features=AutomationControlled",
     ],
     executablePath: await chromium.executablePath(),
     headless: chromium.headless,
@@ -116,14 +115,16 @@ async function scrapeSubtitlesByTitle(title) {
   try {
     await page.waitForSelector(".subtitle-entry, table.table tbody tr", { timeout: 8000 });
     results = await page.$$eval(".subtitle-entry, table.table tbody tr", (rows) =>
-      rows.map((r) => {
-        const link =
-          r.querySelector("a[href*='/download']")?.href ||
-          r.querySelector("a[href*='/subtitles/']")?.href;
-        const name = r.querySelector(".release, a")?.textContent?.trim() || "Neznan";
-        const lang = r.innerText.toLowerCase().includes("slovenski") ? "sl" : "";
-        return link && lang ? { name, link, lang } : null;
-      }).filter(Boolean)
+      rows
+        .map((r) => {
+          const link =
+            r.querySelector("a[href*='/download']")?.href ||
+            r.querySelector("a[href*='/subtitles/']")?.href;
+          const name = r.querySelector(".release, a")?.textContent?.trim() || "Neznan";
+          const lang = r.innerText.toLowerCase().includes("slovenski") ? "sl" : "";
+          return link && lang ? { name, link, lang } : null;
+        })
+        .filter(Boolean)
     );
   } catch {
     console.log("⚠️ Ni bilo mogoče prebrati tabelo rezultatov.");
@@ -138,9 +139,9 @@ async function scrapeSubtitlesByTitle(title) {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "com.formio.podnapisinet",
-    version: "13.3.0",
-    name: "Formio Podnapisi.NET 🇸🇮 Stealth",
-    description: "Stabilno iskanje slovenskih podnapisov (stealth login, klasično iskanje)",
+    version: "13.4.0",
+    name: "Formio Podnapisi.NET 🇸🇮 Classic Stealth",
+    description: "Išče slovenske podnapise samo po imenu filma (brez filename, s prijavo)",
     types: ["movie", "series"],
     resources: [{ name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] }],
     catalogs: [],
@@ -148,26 +149,15 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-// 🎬 Endpoint
+// 🎬 Endpoint – iskanje samo po osnovnem naslovu filma
 app.get("/subtitles/:type/:imdbId/*", async (req, res) => {
   console.log("==================================================");
   const imdbId = req.params.imdbId;
-  const fullUrl = req.url;
-
   console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
-  console.log(`🧩 Celoten URL: ${fullUrl}`);
 
-  const filenameMatch = decodeURIComponent(fullUrl).match(/filename=([^&]+)/);
-  let searchTerm = filenameMatch ? decodeURIComponent(filenameMatch[1]) : await getTitleFromIMDb(imdbId);
-
-  searchTerm = searchTerm
-    .replace(/\.[a-z0-9]{2,4}$/i, "")
-    .replace(/[\._\-]/g, " ")
-    .replace(/\b(2160p|1080p|720p|hdr|x265|bluray|rip|dts|aac|uhd|remux|brrip|hevc)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  console.log(`🎯 Iščem po imenu: ${searchTerm}`);
+  // 📌 Vedno išči samo po IMDb naslovu (brez filename)
+  const searchTerm = await getTitleFromIMDb(imdbId);
+  console.log(`🎯 Iščem samo po imenu filma: ${searchTerm}`);
 
   const results = await scrapeSubtitlesByTitle(searchTerm);
 
@@ -193,6 +183,6 @@ app.get("/", (_, res) => res.redirect("/manifest.json"));
 
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Stealth v13.3.0 posluša na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Stealth v13.4.0 posluša na portu ${PORT}`);
   console.log("==================================================");
 });
