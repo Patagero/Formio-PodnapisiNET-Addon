@@ -25,6 +25,7 @@ const manifest = {
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const CACHE_FILE = path.join(TMP_DIR, "cache.json");
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
+
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
@@ -46,12 +47,15 @@ let globalCookiesLoaded = false;
 
 async function getBrowser() {
   if (globalBrowser) return globalBrowser;
-  const executablePath = chromium.path;
+
+  const executablePath = chromium.executablePath; // ← FIXED FOR chromium 109
+
   globalBrowser = await puppeteer.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-dev-shm-usage"],
-    executablePath,
+    executablePath: executablePath,
     headless: chromium.headless
   });
+
   return globalBrowser;
 }
 
@@ -105,18 +109,12 @@ async function ensureLoggedIn(page) {
   console.log("💾 Piškotki shranjeni.");
 }
 
-// 🎬 IMDb → naslov (brez letnice)
 async function getTitleFromIMDb(imdbId) {
   try {
     const res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
     const data = await res.json();
-    if (data?.Title) {
-      console.log(`🎬 IMDb → ${data.Title} (${data.Year})`);
-      return data.Title.trim(); // 🔥 brez letnice
-    }
-  } catch {
-    console.log("⚠️ Napaka IMDb API");
-  }
+    if (data?.Title) return data.Title.trim();
+  } catch {}
   return imdbId;
 }
 
@@ -128,8 +126,8 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
   await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
   await new Promise(r => setTimeout(r, 2500));
 
-  const html = await page.content();
   let results = [];
+  const html = await page.content();
 
   try {
     results = await page.$$eval("table.table tbody tr", (rows) =>
@@ -139,22 +137,25 @@ async function fetchSubtitlesForLang(browser, title, langCode) {
         return link ? { link, title } : null;
       }).filter(Boolean)
     );
-  } catch {
+  } catch {}
+
+  if (!results.length) {
     const regex = /href="([^"]*\/download)"[^>]*>([^<]+)<\/a>/g;
     let match;
     while ((match = regex.exec(html)) !== null) {
-      const link = "https://www.podnapisi.net" + match[1];
-      const title = match[2].trim();
-      results.push({ link, title });
+      results.push({
+        link: "https://www.podnapisi.net" + match[1],
+        title: match[2].trim()
+      });
     }
   }
 
-  console.log(`✅ Najdenih ${results.length} (${langCode})`);
   return results.map((r, i) => ({ ...r, lang: langCode, index: i + 1 }));
 }
 
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const imdbId = req.params.id;
+
   console.log("==================================================");
   console.log("🎬 Prejemam zahtevo za IMDb:", imdbId);
 
@@ -169,7 +170,6 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
   const page = await browser.newPage();
   await ensureLoggedIn(page);
 
-  // 🔎 Iščemo samo slovenske 🇸🇮
   const slResults = await fetchSubtitlesForLang(browser, title, "sl");
 
   if (!slResults.length) {
@@ -194,15 +194,14 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(extractDir, true);
 
-      const srtFile = fs.readdirSync(extractDir).find((f) => f.endsWith(".srt"));
+      const srtFile = fs.readdirSync(extractDir).find(f => f.endsWith(".srt"));
       if (srtFile) {
         subtitles.push({
           id: `formio-podnapisi-${idx}`,
           url: `https://formio-podnapisinet-addon-1.onrender.com/files/${imdbId}_${idx}/${encodeURIComponent(srtFile)}`,
           lang: r.lang,
-          name: `${flag} ${r.title} (${r.lang.toUpperCase()})`
+          name: `${flag} ${r.title}`
         });
-        console.log(`📜 [${r.lang}] ${srtFile}`);
         idx++;
       }
     } catch (err) {
@@ -226,7 +225,7 @@ app.get("/manifest.json", (req, res) => res.json(manifest));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven (brez letnice, login cache, samo slovenski podnapisi)");
+  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven");
   console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
   console.log("==================================================");
 });
