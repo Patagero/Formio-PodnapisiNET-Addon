@@ -1,0 +1,19 @@
+{
+  "id": "com.formio.podnapisinet",
+  "version": "17.0.0",
+  "name": "Formio Podnapisi.NET 🇸🇮",
+  "description": "Samodejna prijava, HTML parsing, slovenski podnapisi po IMDb ID / naslovu.",
+  "types": ["movie", "series"],
+  "resources": [
+    {
+      "name": "subtitles",
+      "types": ["movie", "series"],
+      "idPrefixes": ["tt"]
+    }
+  ],
+  "catalogs": [],
+  "behaviorHints": {
+    "configurable": false,
+    "configurationRequired": false
+  }
+}
