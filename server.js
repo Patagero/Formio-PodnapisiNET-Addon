@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { load as cheerioLoad } from "cheerio";
-import manifest from "./manifest.json" assert { type: "json" };
+import manifest from "./manifest.json" with { type: "json" };   // ✅ POPRAVLJENO ZA NODE 22
 
 const app = express();
 app.use(cors());
@@ -21,13 +21,6 @@ const LOGIN_URL = "https://www.podnapisi.net/sl/login";
 const POD_USER = process.env.PODNAPISI_USER || "";
 const POD_PASS = process.env.PODNAPISI_PASS || "";
 const OMDB_KEY = process.env.OMDB_API_KEY || "";
-
-// ❗ Brez uporabniškega / gesla nima smisla
-if (!POD_USER || !POD_PASS) {
-  console.warn(
-    "⚠️  PODNAPISI_USER ali PODNAPISI_PASS nista nastavljena! Prijava ne bo delovala."
-  );
-}
 
 let globalCookies = null;
 let lastLoginTime = 0;
@@ -87,7 +80,7 @@ async function ensureLoggedIn() {
   }
 }
 
-// 🎬 IMDb → naslov (opcijsko, če OMDB_KEY obstaja)
+// 🎬 IMDb → naslov
 async function getTitleFromIMDb(imdbId) {
   if (!OMDB_KEY) {
     console.log("ℹ️  OMDB_API_KEY ni nastavljen – vračam kar IMDb ID.");
@@ -109,7 +102,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// 🔍 Iskanje slovenskih podnapisov po naslovu
+// 🔍 Iskanje slovenskih podnapisov
 async function scrapeSubtitlesByTitle(title) {
   console.log(`🌍 Iščem slovenske podnapise za: ${title}`);
 
@@ -122,7 +115,6 @@ async function scrapeSubtitlesByTitle(title) {
     title
   )}&language=sl`;
 
-  // 1️⃣ POSKUS – fetch HTML in cheerio
   try {
     const res = await fetch(searchUrl, {
       headers: {
@@ -140,7 +132,6 @@ async function scrapeSubtitlesByTitle(title) {
     $("table.table tbody tr").each((_, row) => {
       const $row = $(row);
 
-      // TODO: po potrebi prilagodi selektor jezika glede na dejanski HTML
       const langCellText = $row.text().toLowerCase();
       const isSlovenian =
         langCellText.includes("slovenski") ||
@@ -163,14 +154,12 @@ async function scrapeSubtitlesByTitle(title) {
     if (results.length > 0) {
       console.log(`✅ Najdenih ${results.length} slovenskih podnapisov (HTML fetch)`);
       return results;
-    } else {
-      console.log("⚠️  Ni rezultatov s fetch metodo – preklop na Puppeteer fallback...");
     }
   } catch (err) {
     console.log("⚠️  Napaka pri fetch scraping:", err.message);
   }
 
-  // 2️⃣ Puppeteer fallback (če fetch ne najde nič)
+  // Puppeteer fallback
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -232,12 +221,10 @@ app.get("/manifest.json", (_req, res) => {
 });
 
 // 🎬 Stremio subtitles endpoint
-// Stremio kliče npr: /subtitles/movie/tt1234567.json
 app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   console.log("==================================================");
   try {
     const rawId = req.params.imdbId || "";
-    // Pazimo na morebitno podvojeno "tt"
     const imdbId = rawId.startsWith("tt") ? rawId : `tt${rawId}`;
     console.log(`🎬 Prejemam zahtevo za IMDb: ${imdbId}`);
 
@@ -271,6 +258,6 @@ app.get("/health", (_req, res) => res.send("✅ OK"));
 
 app.listen(PORT, () => {
   console.log("==================================================");
-  console.log(`✅ Formio Podnapisi.NET 🇸🇮 v17.0.0 deluje na portu ${PORT}`);
+  console.log(`✅ Formio Podnapisi.NET 🇸🇮 Node 22 FIX DELUJE na portu ${PORT}`);
   console.log("==================================================");
 });
