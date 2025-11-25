@@ -38,7 +38,7 @@ let globalBrowser = null;
 async function getBrowser() {
   if (globalBrowser) return globalBrowser;
 
-  const executablePath = await chromium.executablePath(); // ← FIXED
+  const executablePath = chromium.path; // ← FIXED
 
   globalBrowser = await puppeteer.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-dev-shm-usage"],
