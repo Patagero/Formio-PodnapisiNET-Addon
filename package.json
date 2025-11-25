@@ -1,7 +1,6 @@
 {
   "name": "formio-podnapisinet-addon",
   "version": "6.3.3",
-  "description": "Formio Podnapisi.NET Addon",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -12,7 +11,8 @@
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
     "adm-zip": "^0.5.10",
-    "@sparticuz/chromium": "109.0.0",
-    "puppeteer-core": "19.11.1"
+
+    "puppeteer-core": "18.2.1",
+    "@sparticuz/chromium": "112.0.2"
   }
 }

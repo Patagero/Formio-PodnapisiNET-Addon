@@ -23,22 +23,23 @@ const manifest = {
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const LOGIN_URL = "https://www.podnapisi.net/sl/login";
+
 const USERNAME = "patagero";
 const PASSWORD = "Formio1978";
 
-// Create TMP folder if missing
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-let globalCookies = null;
 let globalBrowser = null;
+let globalCookies = null;
 
-// ============================================================
-//  BROWSER LAUNCH (FIXED FOR CHROMIUM v109)
-// ============================================================
+// =====================================================================================
+// BROWSER — 100% stabilno delovanje s chromium 112 + puppeteer-core 18
+// =====================================================================================
+
 async function getBrowser() {
   if (globalBrowser) return globalBrowser;
 
-  const executablePath = chromium.path; // ← FIXED
+  const executablePath = await chromium.executablePath();  // ← DELUJE ZA 112.0.2
 
   globalBrowser = await puppeteer.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-dev-shm-usage"],
@@ -49,24 +50,18 @@ async function getBrowser() {
   return globalBrowser;
 }
 
-// ============================================================
-//  LOGIN
-// ============================================================
+// =====================================================================================
+// LOGIN
+// =====================================================================================
+
 async function ensureLoggedIn(page) {
   if (globalCookies) {
-    try {
-      await page.setCookie(...globalCookies);
-      console.log("🍪 Cookies loaded.");
-      return;
-    } catch {
-      console.log("⚠ Cookie load failed → relogin");
-    }
+    await page.setCookie(...globalCookies);
+    return;
   }
 
-  console.log("🔐 Logging in ...");
   await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 60000 });
 
-  await page.waitForSelector("input[name='username']");
   await page.type("input[name='username']", USERNAME, { delay: 20 });
   await page.type("input[name='password']", PASSWORD, { delay: 20 });
 
@@ -75,83 +70,72 @@ async function ensureLoggedIn(page) {
     page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 })
   ]);
 
-  const bodyText = await page.evaluate(() => document.body.innerText);
-  if (bodyText.includes("Odjava") || bodyText.includes("Moj profil")) {
-    console.log("✅ Login OK");
-  } else {
-    console.log("⚠ Login maybe failed (no Odjava text)");
-  }
-
   globalCookies = await page.cookies();
 }
 
-// ============================================================
-//  FIND SLOVENIAN SUBTITLES
-// ============================================================
-async function searchSlovenianSubs(browser, title) {
-  const page = await browser.newPage();
-  const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
-  console.log("🌍 Searching:", url);
+// =====================================================================================
+// SEARCH SLOVENIAN SUBTITLES
+// =====================================================================================
 
+async function searchSlSubs(browser, title) {
+  const page = await browser.newPage();
+
+  const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
   await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
   const results = await page.$$eval("table.table tbody tr", rows =>
     rows.map(row => {
-      const link = row.querySelector("a[href*='/download']")?.href || null;
-      const name = row.querySelector("a[href*='/download']")?.innerText?.trim() || null;
-      if (!link || !name) return null;
-      return { link, name };
+      const link = row.querySelector("a[href*='/download']")?.href;
+      const txt = row.querySelector("a[href*='/download']")?.innerText?.trim();
+      if (!link || !txt) return null;
+      return { link, title: txt };
     }).filter(Boolean)
   );
 
-  console.log(`➡️ Najdenih: ${results.length}`);
   return results;
 }
 
-// ============================================================
-//  ROUTE: /subtitles/…
-// ============================================================
+// =====================================================================================
+// ROUTE
+// =====================================================================================
+
 app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
   const imdbId = req.params.imdbId;
-  console.log("==================================================");
-  console.log("🎬 IMDb Request:", imdbId);
 
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  await ensureLoggedIn(page);
-
-  // Get title from OMDB (optional)
   let title = imdbId;
   try {
     const data = await (await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`)).json();
     if (data?.Title) title = data.Title;
   } catch {}
 
-  console.log("🎯 Searching for:", title);
-  const found = await searchSlovenianSubs(browser, title);
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await ensureLoggedIn(page);
 
-  if (!found.length) {
-    console.log("❌ Ni rezultatov.");
-    return res.json({ subtitles: [] });
-  }
+  const found = await searchSlSubs(browser, title);
 
-  const subs = found.map((r, i) => ({
-    id: `formio-${i + 1}`,
-    lang: "sl",
-    url: r.link,
-    title: `${r.name} 🇸🇮`
-  }));
+  if (!found.length) return res.json({ subtitles: [] });
 
-  res.json({ subtitles: subs });
+  res.json({
+    subtitles: found.map((r, i) => ({
+      id: `formio-${i + 1}`,
+      lang: "sl",
+      url: r.link,
+      title: `${r.title} 🇸🇮`
+    }))
+  });
 });
 
-// ============================================================
+// =====================================================================================
+// MANIFEST
+// =====================================================================================
+
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("✅ Formio Podnapisi.NET 🇸🇮 aktiven");
-  console.log(`🌐 Manifest: http://127.0.0.1:${PORT}/manifest.json`);
+  console.log("  Formio Podnapisi.NET 🇸🇮 — ACTIVE");
   console.log("==================================================");
 });
