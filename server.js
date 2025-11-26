@@ -9,9 +9,9 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.3.0",
+  version: "7.4.0",
   name: "Formio Podnapisi.NET 🇸🇮 (LITE)",
-  description: "Stabilna verzija brez Puppeteer – poenostavljen HTML scraping",
+  description: "Stabilna verzija brez Puppeteer, z natančnimi selektorji za nove Podnapisi.net rezultate",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
@@ -35,7 +35,7 @@ async function getTitleFromIMDb(imdbId) {
   return imdbId;
 }
 
-// Direktni fetch na Podnapisi.net, brez Puppeteerja, brez proxyja
+// MAIN SCRAPER
 async function searchSlovenianSubs(imdbId) {
   const title = await getTitleFromIMDb(imdbId);
 
@@ -59,15 +59,21 @@ async function searchSlovenianSubs(imdbId) {
   const results = [];
   const seen = new Set();
 
-  // 1) Poskusi novi layout – vsi linki na /sl/subtitles/
-  $("a[href*='/sl/subtitles/']").each((i, el) => {
-    const href = $(el).attr("href");
-    let name = $(el).text().trim();
+  //
+  // 1️⃣ NOVI PODNAPISI.NET LAYOUT (2024+)
+  //    - vsi pravi rezultati so v ".media" blokih
+  //
+  $(".media").each((i, el) => {
+    const a = $(el).find("a[href*='/sl/subtitles/']").first();
+
+    const href = a.attr("href");
+    let name = a.text().trim();
 
     if (!href) return;
 
-    const full =
-      href.startsWith("http") ? href : `https://www.podnapisi.net${href}`;
+    const full = href.startsWith("http")
+      ? href
+      : `https://www.podnapisi.net${href}`;
 
     if (seen.has(full)) return;
     seen.add(full);
@@ -82,12 +88,15 @@ async function searchSlovenianSubs(imdbId) {
     });
   });
 
-  // 2) Fallback – stari layout (tabela)
+  //
+  // 2️⃣ STAR LAYOUT (tabela) – fallback
+  //
   if (results.length === 0) {
     $("table.table tbody tr").each((i, row) => {
       const a = $(row)
         .find("a[href*='/download'], a[href*='/subtitles/']")
         .first();
+
       const href = a.attr("href");
       let name = a.text().trim();
 
@@ -110,7 +119,9 @@ async function searchSlovenianSubs(imdbId) {
     });
   }
 
-  // 3) Fallback regex – karkoli, kar izgleda kot link na subtitles
+  //
+  // 3️⃣ REGEX fallback – če vse odpove
+  //
   if (results.length === 0) {
     const regex = /href="([^"]*\/sl\/subtitles\/[^"]+)"[^>]*>([^<]+)<\/a>/g;
     let match;
@@ -159,6 +170,6 @@ app.get("/", (req, res) => res.redirect("/manifest.json"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log("  Formio Podnapisi.NET LITE RUNNING (no Puppeteer, no proxy)");
+  console.log("  Formio Podnapisi.NET LITE RUNNING (FINAL VERSION)");
   console.log("==================================================");
 });
