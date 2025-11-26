@@ -9,35 +9,45 @@ app.use(express.json());
 
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "7.0.0",
-  name: "Formio Podnapisi.NET 🇸🇮 (LITE)",
-  description: "Stabilna verzija brez Puppeteer – samo slovenski podnapisi",
+  version: "7.1.0",
+  name: "Formio Podnapisi.NET 🇸🇮 (LITE + Bypass)",
+  description: "Stabilna verzija brez Puppeteer, zanesljiv Cloudflare bypass",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
   idPrefixes: ["tt"]
 };
 
+// IMDB → Title
 async function getTitleFromIMDb(imdbId) {
   try {
-    const r = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
+    const r = await fetch(
+      `https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`
+    );
     const d = await r.json();
     if (d?.Title) return d.Title;
   } catch {}
   return imdbId;
 }
 
+// Cloudflare bypass fetch
+async function fetchBypass(url) {
+  const full = `https://api.bypass.vip/raw?url=${encodeURIComponent(url)}`;
+  const res = await fetch(full);
+  return await res.text();
+}
+
+// Search subtitles (lite)
 async function searchSlovenianSubs(imdbId) {
   const title = await getTitleFromIMDb(imdbId);
-  const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
 
-  const page = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "sl,en;q=0.8"
-    }
-  });
-  const html = await page.text();
+  const searchUrl =
+    "https://www.podnapisi.net/sl/subtitles/search/?" +
+    `keywords=${encodeURIComponent(title)}&language=sl`;
+
+  console.log("🌍 SCRAPING VIA BYPASS:", searchUrl);
+
+  const html = await fetchBypass(searchUrl);
   const $ = cheerio.load(html);
 
   const results = [];
@@ -61,9 +71,11 @@ async function searchSlovenianSubs(imdbId) {
     });
   });
 
+  console.log(`➡️ Najdenih ${results.length} slovenskih podnapisov`);
   return results;
 }
 
+// Routes
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
 app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
@@ -73,7 +85,7 @@ app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
     const subs = await searchSlovenianSubs(imdbId);
     res.json({ subtitles: subs });
   } catch (err) {
-    console.log("ERROR", err);
+    console.log("💥 Error:", err);
     res.json({ subtitles: [] });
   }
 });
@@ -81,9 +93,8 @@ app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log(" Formio Podnapisi (LITE) running on port:", PORT);
+  console.log("  Formio Podnapisi.NET LITE + BYPASS Running");
   console.log("==================================================");
 });
