@@ -1,7 +1,7 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "7.0.0",
-  "description": "Formio Podnapisi.NET 🇸🇮 - stabilna verzija brez Puppeteer",
+  "version": "7.3.0",
+  "description": "Formio Podnapisi.NET 🇸🇮 - LITE brez Puppeteer",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -12,8 +12,5 @@
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2",
     "cheerio": "^1.0.0-rc.12"
-  },
-  "engines": {
-    "node": ">=20"
   }
 }
