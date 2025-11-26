@@ -8,29 +8,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Manifest (Stremio)
+// Manifest
 const manifest = {
   id: "org.formio.podnapisi",
-  version: "9.0.0",
-  name: "Formio Podnapisi.NET 🇸🇮 (FILMI + SERIJE)",
-  description: "Slovenski podnapisi – ZIP→SRT extractor – podpira filme in serije.",
+  version: "10.0.0",
+  name: "Formio Podnapisi.NET 🇸🇮 (Final Version – Movies + Series + ZIP Fix)",
+  description: "Slovenski podnapisi: filmi + serije + ZIP → SRT extractor (new Podnapisi layout).",
   logo: "https://www.podnapisi.net/favicon.ico",
   types: ["movie", "series"],
   resources: ["subtitles"],
   idPrefixes: ["tt"]
 };
 
-// --- PARSER ZA SERIJE ----------------------------------------------------
+// ---- Parse series format (tt1234567:season:episode) ----------------------
 function parseSeries(imdb) {
-  const [id, season, episode] = imdb.split(":");
+  const parts = imdb.split(":");
   return {
-    id,
-    season: season ? String(season) : null,
-    episode: episode ? String(episode) : null
+    id: parts[0],
+    season: parts[1] || null,
+    episode: parts[2] || null
   };
 }
 
-// --- IMDb TITLE FETCH ----------------------------------------------------
+// ---- IMDb title lookup ---------------------------------------------------
 async function getTitleFromIMDb(imdbId) {
   try {
     const r = await fetch(
@@ -41,36 +41,34 @@ async function getTitleFromIMDb(imdbId) {
       console.log(`🎬 IMDb: ${imdbId} → ${d.Title}`);
       return d.Title;
     }
-  } catch {}
+  } catch (e) { console.log("IMDb error", e); }
   return imdbId;
 }
 
-// --- EPISODE MATCHER -----------------------------------------------------
+// ---- Episode matching ----------------------------------------------------
 function matchesEpisode(name, season, episode) {
-  if (!season || !episode) return true; // ni serija, vrni vse
+  if (!season || !episode) return true;
 
   const s = season.padStart(2, "0");
   const e = episode.padStart(2, "0");
-  const lower = name.toLowerCase();
+  const n = name.toLowerCase();
 
   const patterns = [
     `s${s}e${e}`,
-    `s${season}e${episode}`,
+    `season ${season} episode ${episode}`,
     `${season}x${episode}`,
     `${season}.${episode}`,
-    `season ${season} episode ${episode}`,
-    `episode ${episode}`,
-    `ep ${episode}`
+    `ep ${episode}`,
+    `episode ${episode}`
   ];
 
-  return patterns.some(p => lower.includes(p.toLowerCase()));
+  return patterns.some(p => n.includes(p.toLowerCase()));
 }
 
-// --- PODNAPISI SCRAPER ---------------------------------------------------
-async function searchSlovenianSubs(title, season = null, episode = null) {
+// ---- Podnapisi scraper ---------------------------------------------------
+async function searchSlovenianSubs(title, season, episode) {
   const searchUrl =
-    "https://www.podnapisi.net/sl/subtitles/search/?" +
-    `keywords=${encodeURIComponent(title)}&language=sl`;
+    `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
 
   console.log("🌍 SCRAPING:", searchUrl);
 
@@ -87,7 +85,7 @@ async function searchSlovenianSubs(title, season = null, episode = null) {
   const results = [];
   const seen = new Set();
 
-  // 1️⃣ Novi layout ".media"
+  // NEW layout
   $(".media").each((i, el) => {
     const a = $(el).find("a[href*='/sl/subtitles/']").first();
     const href = a.attr("href");
@@ -114,103 +112,111 @@ async function searchSlovenianSubs(title, season = null, episode = null) {
     });
   });
 
-  // 2️⃣ Old layout fallback
+  // OLD layout fallback
   if (results.length === 0) {
     $("table.table tbody tr").each((i, row) => {
-      const a = $(row)
-        .find("a[href*='/download'], a[href*='/subtitles/']")
-        .first();
-
+      const a = $(row).find("a[href*='subtitles']").first();
       const href = a.attr("href");
-      let name = a.text().trim();
+      const name = a.text().trim();
+
       if (!href) return;
 
       const full = href.startsWith("http")
         ? href
         : `https://www.podnapisi.net${href}`;
 
-      if (seen.has(full)) return;
+      if (!seen.has(full) && matchesEpisode(name, season, episode)) {
+        results.push({
+          id: `slo-${results.length + 1}`,
+          lang: "sl",
+          url: `/download?url=${encodeURIComponent(full)}`,
+          title: `${name} 🇸🇮`
+        });
+      }
+
       seen.add(full);
-      if (!name) name = "Podnapisi";
-
-      if (!matchesEpisode(name, season, episode)) return;
-
-      results.push({
-        id: `slo-${results.length + 1}`,
-        lang: "sl",
-        url: `/download?url=${encodeURIComponent(full)}`,
-        title: `${name} 🇸🇮`
-      });
     });
   }
 
-  // 3️⃣ Regex backup
-  if (results.length === 0) {
-    const regex = /href="([^"]*\/sl\/subtitles\/[^"]+)"[^>]*>([^<]+)<\/a>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      const full = match[1].startsWith("http")
-        ? match[1]
-        : `https://www.podnapisi.net${match[1]}`;
-      const name = match[2].trim();
-
-      if (seen.has(full)) continue;
-      seen.add(full);
-
-      if (!matchesEpisode(name, season, episode)) continue;
-
-      results.push({
-        id: `slo-${results.length + 1}`,
-        lang: "sl",
-        url: `/download?url=${encodeURIComponent(full)}`,
-        title: `${name} 🇸🇮`
-      });
-    }
-  }
-
-  console.log(`➡️ Najdenih ${results.length} podnapisov (po filtriranju S/E)`);
+  console.log(`➡️ Najdenih ${results.length} podnapisov (po S/E filtru)`);
   return results;
 }
 
-// --- ZIP → SRT Extractor ----------------------------------------------------
+// =======================================================================
+//      ⭐ NEW: FINAL FIXED ZIP EXTRACTOR (WORKS FOR NEW PODNAPISI SITE)
+// =======================================================================
 app.get("/download", async (req, res) => {
   try {
-    const fileUrl = req.query.url;
-    if (!fileUrl) return res.status(400).send("Missing url");
+    const pageUrl = req.query.url;
+    if (!pageUrl) return res.status(400).send("Missing url");
 
-    console.log("⬇️ Fetching ZIP:", fileUrl);
+    console.log("⬇️ STEP 1: Fetch HTML page:", pageUrl);
 
-    const r = await fetch(fileUrl, {
+    // 1) Fetch the HTML page (not ZIP!)
+    const pageRes = await fetch(pageUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0",
         "Accept-Language": "sl,en;q=0.9"
       }
     });
 
-    const buf = Buffer.from(await r.arrayBuffer());
-    const zip = new AdmZip(buf);
-    const srt = zip
+    const html = await pageRes.text();
+    const $ = cheerio.load(html);
+
+    // 2) Extract the REAL ZIP URL
+    let zipHref =
+      $('a[href*="/download"]').attr("href") ||
+      $('a[href*="download"]').attr("href");
+
+    if (!zipHref) {
+      console.log("❌ No zip link found in page");
+      return res.status(404).send("ZIP link missing");
+    }
+
+    const zipUrl = zipHref.startsWith("http")
+      ? zipHref
+      : `https://www.podnapisi.net${zipHref}`;
+
+    console.log("⬇️ STEP 2: Real ZIP URL:", zipUrl);
+
+    // 3) Download ZIP
+    const zipRes = await fetch(zipUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "sl,en;q=0.9"
+      }
+    });
+
+    const zipBuffer = Buffer.from(await zipRes.arrayBuffer());
+
+    // 4) Extract SRT from ZIP
+    const zip = new AdmZip(zipBuffer);
+    const srtEntry = zip
       .getEntries()
       .find(e => e.entryName.toLowerCase().endsWith(".srt"));
 
-    if (!srt) return res.status(404).send("No SRT found");
+    if (!srtEntry) {
+      console.log("❌ ZIP found but contains no .srt");
+      return res.status(404).send("ZIP without SRT");
+    }
+
+    const srtText = srtEntry.getData().toString("utf8");
 
     res.setHeader("Content-Type", "application/x-subrip");
-    res.send(srt.getData().toString("utf8"));
+    res.send(srtText);
 
   } catch (err) {
     console.log("❌ DOWNLOAD ERROR:", err);
-    res.status(500).send("Error extracting SRT");
+    res.status(500).send("ZIP/SRT extraction failed");
   }
 });
 
-// --- MAIN ROUTE -------------------------------------------------------------
-app.get("/manifest.json", (req, res) => res.json(manifest));
-
+// =======================================================================
+//                         MAIN SUBTITLES ROUTE
+// =======================================================================
 app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
   let imdbRaw = req.params.imdbId;
 
-  // SERIJA? (format tt1234567:season:episode)
   let imdbId = imdbRaw;
   let season = null;
   let episode = null;
@@ -224,7 +230,7 @@ app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
 
   console.log("==================================================");
   console.log("🎬 Request:", imdbRaw);
-  console.log(`🔎 Detected → imdbId=${imdbId}, S=${season}, E=${episode}`);
+  console.log(`🔎 Parsed → imdbId=${imdbId}, S=${season}, E=${episode}`);
 
   try {
     const title = await getTitleFromIMDb(imdbId);
@@ -241,12 +247,14 @@ app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
   }
 });
 
+app.get("/manifest.json", (req, res) => res.json(manifest));
+
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 
-// --- START SERVER -----------------------------------------------------------
+// Start
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("==================================================");
-  console.log(" FORMIO PODNAPISI.NET 🇸🇮 — FILMI + SERIJE + SRT READY");
+  console.log(" FORMIO PODNAPISI.NET 🇸🇮 — FINAL VERSION (FULL SUPPORT)");
   console.log("==================================================");
 });
