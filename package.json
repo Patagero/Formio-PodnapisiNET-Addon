@@ -1,16 +1,17 @@
 {
   "name": "formio-podnapisinet-addon",
-  "version": "7.3.0",
-  "description": "Formio Podnapisi.NET 🇸🇮 - LITE brez Puppeteer",
+  "version": "8.0.0",
+  "description": "Formio Podnapisi.NET 🇸🇮 - LITE + ZIP→SRT",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "adm-zip": "^0.5.16",
+    "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
-    "node-fetch": "^3.3.2",
-    "cheerio": "^1.0.0-rc.12"
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2"
   }
 }
