@@ -2,209 +2,125 @@ import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
 import AdmZip from "adm-zip";
-import * as cheerio from "cheerio";
+import cheerio from "cheerio";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
 
-const manifest = {
-  id: "org.formio.podnapisi",
-  version: "8.0.0",
-  name: "Formio Podnapisi.NET 🇸🇮 (LITE + SRT DOWNLOAD)",
-  description: "Slovenski podnapisi za Stremio – direktni ZIP → SRT extractor, brez Puppeteer.",
-  logo: "https://www.podnapisi.net/favicon.ico",
-  types: ["movie", "series"],
-  resources: ["subtitles"],
-  idPrefixes: ["tt"]
-};
+// -------------------------
+// MANIFEST
+// -------------------------
+app.get("/manifest.json", (req, res) => {
+    res.json({
+        id: "org.formio.podnapisi",
+        version: "1.0.0",
+        name: "Podnapisi.NET Stremio Addon",
+        description: "Slovenski podnapisi iz Podnapisi.NET",
+        types: ["movie", "series"],
+        idPrefixes: ["tt"],
+        resources: ["subtitles"],
+    });
+});
 
-// IMDb → Title
-async function getTitleFromIMDb(imdbId) {
-  try {
-    const r = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=thewdb`);
-    const d = await r.json();
-    if (d?.Title) {
-      console.log(`🎬 IMDb: ${imdbId} → ${d.Title}`);
-      return d.Title;
+// -------------------------
+// SCRAPE PODNAPISI.NET
+// -------------------------
+async function searchSubtitles(title) {
+    try {
+        const url = `https://www.podnapisi.net/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
+
+        console.log("🔍 FETCH PAGE:", url);
+
+        const html = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0" }
+        }).then(r => r.text());
+
+        const $ = cheerio.load(html);
+
+        let out = [];
+
+        $(".subtitle-entry").each((i, el) => {
+            const link = $(el).find("a:first").attr("href");
+            const name = $(el).find("a:first").text().trim();
+
+            if (!link) return;
+
+            out.push({
+                id: link.split("/").pop(),
+                title: name,
+                download: `https://www.podnapisi.net${link}/download`
+            });
+        });
+
+        console.log(`➡️ Najdenih ${out.length} podnapisov`);
+        return out;
+
+    } catch (err) {
+        console.error("❌ SCRAPE ERROR:", err);
+        return [];
     }
-  } catch {}
-  return imdbId;
 }
 
-// MAIN SCRAPER (new + old Podnapisi.net layout)
-async function searchSlovenianSubs(imdbId) {
-  const title = await getTitleFromIMDb(imdbId);
-
-  const searchUrl =
-    "https://www.podnapisi.net/sl/subtitles/search/?" +
-    `keywords=${encodeURIComponent(title)}&language=sl`;
-
-  console.log("🌍 SCRAPING:", searchUrl);
-
-  const res = await fetch(searchUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "sl,en;q=0.8"
-    }
-  });
-
-  const html = await res.text();
-  const $ = cheerio.load(html);
-
-  const results = [];
-  const seen = new Set();
-
-  // 1️⃣ NEW Podnapisi layout – results stored in ".media"
-  $(".media").each((i, el) => {
-    const a = $(el).find("a[href*='/sl/subtitles/']").first();
-
-    const href = a.attr("href");
-    let name = a.text().trim();
-
-    if (!href) return;
-    const full = href.startsWith("http")
-      ? href
-      : `https://www.podnapisi.net${href}`;
-
-    if (seen.has(full)) return;
-    seen.add(full);
-    if (!name) name = "Podnapisi";
-
-    results.push({
-      id: `slo-${results.length + 1}`,
-      lang: "sl",
-      // LINK → goes through our /download endpoint
-      url: `/download?url=${encodeURIComponent(full)}`,
-      title: `${name} 🇸🇮`
-    });
-  });
-
-  // 2️⃣ OLD LAYOUT (fallback)
-  if (results.length === 0) {
-    $("table.table tbody tr").each((i, row) => {
-      const a = $(row)
-        .find("a[href*='/download'], a[href*='/subtitles/']")
-        .first();
-
-      const href = a.attr("href");
-      let name = a.text().trim();
-      if (!href) return;
-
-      const full = href.startsWith("http")
-        ? href
-        : `https://www.podnapisi.net${href}`;
-
-      if (seen.has(full)) return;
-      seen.add(full);
-      if (!name) name = "Podnapisi";
-
-      results.push({
-        id: `slo-${results.length + 1}`,
-        lang: "sl",
-        url: `/download?url=${encodeURIComponent(full)}`,
-        title: `${name} 🇸🇮`
-      });
-    });
-  }
-
-  // 3️⃣ Regex fallback
-  if (results.length === 0) {
-    const regex = /href="([^"]*\/sl\/subtitles\/[^"]+)"[^>]*>([^<]+)<\/a>/g;
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      const full = match[1].startsWith("http")
-        ? match[1]
-        : `https://www.podnapisi.net${match[1]}`;
-
-      const name = match[2].trim() || "Podnapisi";
-
-      if (seen.has(full)) continue;
-      seen.add(full);
-
-      results.push({
-        id: `slo-${results.length + 1}`,
-        lang: "sl",
-        url: `/download?url=${encodeURIComponent(full)}`,
-        title: `${name} 🇸🇮`
-      });
-    }
-  }
-
-  console.log(`➡️ Najdenih ${results.length} slovenskih podnapisov`);
-  return results;
-}
-
-// ZIP → SRT extractor
+// -------------------------
+// DOWNLOAD .SRT (FOR STREMIO)
+// -------------------------
 app.get("/download", async (req, res) => {
-  try {
-    const fileUrl = req.query.url;
-    if (!fileUrl) return res.status(400).send("Missing url");
+    try {
+        const zipUrl = req.query.url;
+        if (!zipUrl) return res.status(400).send("Missing url parameter");
 
-    console.log("⬇️ Fetching ZIP:", fileUrl);
+        console.log("⬇ DOWNLOADING ZIP:", zipUrl);
 
-    const r = await fetch(fileUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "sl,en;q=0.9"
-      }
-    });
+        const buf = await fetch(zipUrl, {
+            headers: { "User-Agent": "Mozilla/5.0" }
+        }).then(r => r.buffer());
 
-    const buf = Buffer.from(await r.arrayBuffer());
+        const zip = new AdmZip(buf);
+        const entries = zip.getEntries();
 
-    const zip = new AdmZip(buf);
-    const entries = zip.getEntries();
+        for (const entry of entries) {
+            if (entry.entryName.toLowerCase().endsWith(".srt")) {
+                const srt = zip.readAsText(entry);
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                return res.send(srt);
+            }
+        }
 
-    const srtEntry = entries.find(e => e.entryName.toLowerCase().endsWith(".srt"));
+        return res.status(404).send("SRT not found");
 
-    if (!srtEntry) {
-      console.log("❌ ZIP does not contain .srt");
-      return res.status(404).send("No SRT found");
+    } catch (err) {
+        console.error("❌ DOWNLOAD ERROR:", err);
+        res.status(500).send("Internal error");
     }
-
-    const srtText = srtEntry.getData().toString("utf8");
-
-    res.setHeader("Content-Type", "application/x-subrip");
-    res.send(srtText);
-
-  } catch (err) {
-    console.log("❌ DOWNLOAD ERROR:", err);
-    res.status(500).send("Error extracting SRT");
-  }
 });
 
-// ROUTES
-app.get("/manifest.json", (req, res) => res.json(manifest));
+// -------------------------
+// SUBTITLES (Stremio expects .json)
+// -------------------------
+app.get("/subtitles/:type/:imdb.json", async (req, res) => {
+    const imdb = req.params.imdb;
+    const filename = req.query.filename || "";
+    const cleanTitle = filename.replace(/\./g, " ").replace(/\b\d{3,4}p\b/gi, "").trim();
 
-app.get("/subtitles/:type/:imdbId/:extra?.json", async (req, res) => {
-  const imdbId = req.params.imdbId;
+    const title = cleanTitle || imdb;
 
-  console.log("==================================================");
-  console.log("🎬 IMDb Request:", imdbId);
+    console.log("🎬 CLEAN TITLE:", title);
 
-  try {
-    const subs = await searchSlovenianSubs(imdbId);
+    const results = await searchSubtitles(title);
 
-    const base = "https://formio-podnapisinet-addon-1.onrender.com";
+    const out = results.map(sub => ({
+        id: sub.id,
+        lang: "sl",
+        url: `${req.protocol}://${req.get("host")}/download?url=${encodeURIComponent(sub.download)}`
+    }));
 
-    // add full URLs for Stremio
-    subs.forEach(s => {
-      s.url = `${base}${s.url}`;
-    });
-
-    res.json({ subtitles: subs });
-  } catch (err) {
-    console.log("💥 ERROR:", err);
-    res.json({ subtitles: [] });
-  }
+    res.json({ subtitles: out });
 });
 
-app.get("/", (req, res) => res.redirect("/manifest.json"));
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("==================================================");
-  console.log(" Formio Podnapisi.NET 🇸🇮 — FINAL VERSION ACTIVE");
-  console.log(" ZIP → SRT Extractor READY");
-  console.log("==================================================");
+// -------------------------
+// START SERVER
+// -------------------------
+const PORT = process.env.PORT || 7000;
+app.listen(PORT, () => {
+    console.log("✅ ADDON RUNNING ON PORT", PORT);
 });
