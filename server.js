@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
 import AdmZip from "adm-zip";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";   // <-- FIXED
 
 const app = express();
 app.use(cors());
@@ -23,7 +23,7 @@ app.get("/manifest.json", (req, res) => {
 });
 
 // -------------------------
-// SCRAPE PODNAPISI.NET
+// SCRAPER
 // -------------------------
 async function searchSubtitles(title) {
     try {
@@ -62,7 +62,7 @@ async function searchSubtitles(title) {
 }
 
 // -------------------------
-// DOWNLOAD .SRT (FOR STREMIO)
+// DOWNLOAD (EXTRACT .SRT)
 // -------------------------
 app.get("/download", async (req, res) => {
     try {
@@ -95,7 +95,7 @@ app.get("/download", async (req, res) => {
 });
 
 // -------------------------
-// SUBTITLES (Stremio expects .json)
+// SUBTITLES ENDPOINT
 // -------------------------
 app.get("/subtitles/:type/:imdb.json", async (req, res) => {
     const imdb = req.params.imdb;
