@@ -1,16 +1,17 @@
 {
-  "name": "podnapisi-addon",
-  "version": "1.0.0",
-  "description": "Stremio Podnapisi.NET Addon",
+  "name": "formio-podnapisinet-addon",
+  "version": "8.0.0",
+  "description": "Podnapisi.NET Stremio Addon",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "cheerio": "^1.0.0",
+    "adm-zip": "^0.5.16",
+    "cheerio": "^1.0.0-rc.12",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "node-fetch": "^3.3.2",
-    "adm-zip": "^0.5.10"
+    "node-fetch": "^3.3.2"
   }
 }
