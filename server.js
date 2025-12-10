@@ -1,138 +1,119 @@
 import express from "express";
-import cors from "cors";
 import fetch from "node-fetch";
-import * as cheerio from "cheerio";
+import cheerio from "cheerio";
 import AdmZip from "adm-zip";
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 10000;
 
-const BASE = "https://www.podnapisi.net";
-const HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "sl"
-};
-
-// -----------------------
-//  SEARCH BY TITLE
-// -----------------------
-async function searchSubtitles(title) {
-    const url = `${BASE}/sl/subtitles/search/?keywords=${encodeURIComponent(title)}&language=sl`;
-    console.log("🔍 SEARCH URL:", url);
-
-    const res = await fetch(url, { headers: HEADERS });
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    const entries = $(".subtitle-entry");
-    console.log("➡ Najdenih:", entries.length);
-
-    const results = [];
-
-    entries.each((i, el) => {
-        const a = $(el).find("a");
-        const href = a.attr("href");
-        if (!href) return;
-
-        const full = BASE + href;
-        const id = href.split("/").pop();
-
-        results.push({
-            id,
-            name: a.text().trim(),
-            url: full
-        });
-    });
-
-    return results;
-}
-
-// -----------------------
-//  DOWNLOAD ZIP + EXTRACT SRT
-// -----------------------
-async function getSubtitleSRT(subUrl) {
-    console.log("⬇ PRIDOBIVAM:", subUrl);
-
-    const page = await fetch(subUrl, { headers: HEADERS });
-    const html = await page.text();
-    const $ = cheerio.load(html);
-
-    const btn = $("a.btn-download");
-    if (!btn.length) {
-        console.log("❌ ZIP BUTTON NOT FOUND");
-        return null;
-    }
-
-    const zipUrl = BASE + btn.attr("href");
-    console.log("📦 ZIP:", zipUrl);
-
-    const zipRes = await fetch(zipUrl, { headers: HEADERS });
-    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
-
-    try {
-        const zip = new AdmZip(zipBuf);
-        const entries = zip.getEntries();
-
-        for (const e of entries) {
-            if (e.entryName.endsWith(".srt")) {
-                console.log("📄 Extract:", e.entryName);
-                return zip.readAsText(e);
-            }
-        }
-    } catch (err) {
-        console.log("❌ ZIP EXTRACT ERROR:", err);
-    }
-
-    return null;
-}
-
-// -----------------------
-//  MANIFEST
-// -----------------------
 app.get("/manifest.json", (req, res) => {
     res.json({
         id: "org.formio.podnapisi",
         version: "1.0.0",
-        name: "Podnapisi.NET Stremio Addon",
+        name: "Podnapisi.NET",
         description: "Slovenski podnapisi iz Podnapisi.NET",
-        types: ["movie", "series"],
         idPrefixes: ["tt"],
-        resources: ["subtitles"]
+        types: ["movie", "series"],
+        resources: [
+            { name: "subtitles", types: ["movie", "series"] }
+        ]
     });
 });
 
-// -----------------------
-//  SUBTITLES ENDPOINT
-// -----------------------
-app.get("/subtitles/:type/:imdb.json", async (req, res) => {
-    const filename = req.query.filename;
-    if (!filename) return res.json({ subtitles: [] });
+// Clean title to simple searchable form
+function cleanFilename(name) {
+    return name
+        .replace(/\./g, " ")
+        .replace(/\d{3,4}p/gi, "")
+        .replace(/BDRemux|BluRay|x264|x265|HEVC|HDR|SDR|AAC|DTS|WEBRip|WEB-DL|Remastered/gi, "")
+        .trim();
+}
 
-    const clean = filename.split(".")[0];
-    console.log("🎬 CLEAN TITLE:", clean);
+// Subtitle search route
+app.get("/subtitles/:type/:id.json", async (req, res) => {
+    const imdb = req.params.id;
+    const filename = req.query.filename || "";
+    const clean = cleanFilename(filename);
 
-    const results = await searchSubtitles(clean);
-    const output = [];
+    console.log("🎬 IMDb:", imdb);
+    console.log("🎬 Filename:", filename);
+    console.log("🎬 Clean title:", clean);
 
-    for (const r of results) {
-        const srt = await getSubtitleSRT(r.url);
-        if (!srt) continue;
+    const searchURL =
+        "https://www.podnapisi.net/sl/subtitles/search/?keywords=" +
+        encodeURIComponent(clean) +
+        "&language=sl";
 
-        output.push({
-            id: r.id,
-            lang: "sl",
-            name: r.name,
-            url: r.url,
-            subtitles: srt
+    console.log("🔍 Searching:", searchURL);
+
+    let html;
+    try {
+        const response = await fetch(searchURL, {
+            headers: { "User-Agent": "Mozilla/5.0" }
         });
+        html = await response.text();
+    } catch (e) {
+        console.log("❌ Fetch error:", e);
+        return res.json({ subtitles: [] });
     }
 
-    console.log("✅ POSLANO:", output.length);
-    res.json({ subtitles: output });
+    const $ = cheerio.load(html);
+    let results = [];
+
+    $(".subtitle-entry").each((i, el) => {
+        const link = $(el).find("a").attr("href");
+        if (link) {
+            results.push("https://www.podnapisi.net" + link + "/download");
+        }
+    });
+
+    console.log("➡️ Found:", results.length);
+
+    if (results.length === 0) {
+        return res.json({ subtitles: [] });
+    }
+
+    // Download first matching subtitle
+    const zipURL = results[0];
+    console.log("⬇ ZIP:", zipURL);
+
+    let srtText = "";
+    try {
+        const zipData = await fetch(zipURL, {
+            headers: { "User-Agent": "Mozilla/5.0" }
+        }).then(r => r.arrayBuffer());
+
+        const zip = new AdmZip(Buffer.from(zipData));
+        const entries = zip.getEntries();
+
+        for (const entry of entries) {
+            if (entry.entryName.toLowerCase().endsWith(".srt")) {
+                srtText = zip.readAsText(entry);
+                break;
+            }
+        }
+    } catch (err) {
+        console.log("❌ ZIP extraction error:", err);
+        return res.json({ subtitles: [] });
+    }
+
+    if (!srtText) {
+        console.log("❌ No .srt found");
+        return res.json({ subtitles: [] });
+    }
+
+    // Serve subtitle from addon URL
+    const srtId = Buffer.from(srtText).toString("base64");
+
+    return res.json({
+        subtitles: [
+            {
+                id: imdb,
+                lang: "sl",
+                url: `data:text/plain;base64,${srtId}`
+            }
+        ]
+    });
 });
 
-// -----------------------
-//  START SERVER
-// -----------------------
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🔥 RUNNING ON ${PORT}`));
+app.listen(PORT, () => console.log("🔥 ADDON RUNNING ON", PORT));
