@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";   // <-- FIXED
 import AdmZip from "adm-zip";
 
 const app = express();
@@ -29,7 +29,6 @@ function cleanFilename(name) {
         .trim();
 }
 
-// Subtitle search route
 app.get("/subtitles/:type/:id.json", async (req, res) => {
     const imdb = req.params.id;
     const filename = req.query.filename || "";
@@ -67,13 +66,12 @@ app.get("/subtitles/:type/:id.json", async (req, res) => {
         }
     });
 
-    console.log("➡️ Found:", results.length);
+    console.log(➡️ Found:", results.length);
 
     if (results.length === 0) {
         return res.json({ subtitles: [] });
     }
 
-    // Download first matching subtitle
     const zipURL = results[0];
     console.log("⬇ ZIP:", zipURL);
 
@@ -102,7 +100,6 @@ app.get("/subtitles/:type/:id.json", async (req, res) => {
         return res.json({ subtitles: [] });
     }
 
-    // Serve subtitle from addon URL
     const srtId = Buffer.from(srtText).toString("base64");
 
     return res.json({
