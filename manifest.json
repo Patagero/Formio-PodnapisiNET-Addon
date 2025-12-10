@@ -1,0 +1,15 @@
+{
+  "id": "org.formio.podnapisi",
+  "name": "Podnapisi.NET Addon",
+  "version": "1.0.0",
+  "description": "Slovenski podnapisi iz Podnapisi.NET",
+  "resources": [
+    {
+      "name": "subtitles",
+      "types": ["movie", "series"]
+    }
+  ],
+  "types": ["movie", "series"],
+  "idPrefixes": ["tt"],
+  "catalogs": []
+}
