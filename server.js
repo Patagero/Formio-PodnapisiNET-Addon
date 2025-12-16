@@ -1,31 +1,15 @@
 import express from "express";
 import fetch from "node-fetch";
-import * as cheerio from "cheerio";
+import cheerio from "cheerio";
+import unzipper from "unzipper";
+import cors from "cors";
 
 const app = express();
+app.use(cors());
+
 const PORT = process.env.PORT || 10000;
 
-/* -------------------- HELPERS -------------------- */
-
-function extractMovieTitle(filename = "") {
-  if (!filename) return "";
-
-  let name = filename;
-
-  // odstrani končnico
-  name = name.replace(/\.[^/.]+$/, "");
-
-  // pike -> presledki
-  name = name.replace(/\./g, " ");
-
-  // odreži vse po letnici
-  name = name.replace(/\b(19|20)\d{2}\b.*$/, "");
-
-  return name.trim();
-}
-
-/* -------------------- MANIFEST -------------------- */
-
+/* ================= MANIFEST ================= */
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
@@ -38,68 +22,66 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-/* -------------------- SUBTITLES -------------------- */
-
+/* ================= SUBTITLES ================= */
 app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   try {
-    const filename = req.query.filename || "";
+    const imdbId = req.params.imdbId;
 
-    console.log("🎬 FILENAME:", filename);
+    // IMDb → naslov (hitro, brez API)
+    const imdbHtml = await fetch(`https://www.imdb.com/title/${imdbId}/`).then(r => r.text());
+    const title = imdbHtml.match(/<title>(.*?)<\/title>/)?.[1]?.split("(")[0].trim();
 
-    const title = extractMovieTitle(filename);
-    console.log("🔍 SEARCHING:", title);
+    if (!title) return res.json({ subtitles: [] });
 
-    if (!title) {
-      return res.json({ subtitles: [] });
-    }
-
-    const searchUrl =
-      "https://www.podnapisi.net/sl/subtitles/search/?keywords=" +
-      encodeURIComponent(title) +
-      "&language=sl";
-
-    const response = await fetch(searchUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html"
-      }
-    });
-
-    if (!response.ok) {
-      console.log("❌ Search failed:", response.status);
-      return res.json({ subtitles: [] });
-    }
-
-    const html = await response.text();
+    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search?keywords=${encodeURIComponent(title)}&language=sl`;
+    const html = await fetch(searchUrl).then(r => r.text());
     const $ = cheerio.load(html);
 
     const subs = [];
 
-    $(".subtitle-entry").each((_, el) => {
-      const link = $(el).find("a").attr("href");
-      const name = $(el).find(".title").text().trim();
-
-      if (!link) return;
+    $(".subtitle-entry a").each((i, el) => {
+      if (i >= 5) return; // max 5
+      const href = $(el).attr("href");
+      const id = href.split("/").pop();
 
       subs.push({
-        id: link,
+        id: `pn-${id}`,
         lang: "sl",
-        name,
-        url: "https://www.podnapisi.net" + link
+        url: `${req.protocol}://${req.get("host")}/download/${id}.srt`
       });
     });
 
-    console.log("➡️ NAJDENIH:", subs.length);
-
     res.json({ subtitles: subs });
-  } catch (err) {
-    console.error("💥 ERROR:", err);
+  } catch (e) {
+    console.error(e);
     res.json({ subtitles: [] });
   }
 });
 
-/* -------------------- START -------------------- */
+/* ================= DOWNLOAD ================= */
+app.get("/download/:id.srt", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const zipUrl = `https://www.podnapisi.net/subtitles/${id}/download`;
 
+    const zip = await fetch(zipUrl);
+    const buffer = await zip.arrayBuffer();
+
+    const directory = await unzipper.Open.buffer(Buffer.from(buffer));
+    const file = directory.files.find(f => f.path.endsWith(".srt"));
+
+    if (!file) return res.status(404).send("No SRT");
+
+    const content = await file.buffer();
+    res.setHeader("Content-Type", "application/x-subrip");
+    res.send(content);
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("Download error");
+  }
+});
+
+/* ================= RUN ================= */
 app.listen(PORT, () => {
-  console.log("🔥 RUNNING ON", PORT);
+  console.log("🔥 ADDON RUNNING ON", PORT);
 });
