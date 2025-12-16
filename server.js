@@ -1,22 +1,17 @@
 import express from "express";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-import cors from "cors";
 import unzipper from "unzipper";
-import fs from "fs";
-import path from "path";
-import { pipeline } from "stream/promises";
+import cors from "cors";
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 10000;
-const TMP_DIR = "/tmp/subs";
-fs.mkdirSync(TMP_DIR, { recursive: true });
 
-/* =========================
+/* ===========================
    MANIFEST
-========================= */
+=========================== */
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
@@ -29,94 +24,122 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-/* =========================
-   SUBTITLES (STREMIO FIX)
-========================= */
-app.get(/^\/subtitles\/(movie|series)\/([^\/]+).*\.json$/, async (req, res) => {
-  const imdbId = req.params[1];
-
-  console.log("🎬 IMDb:", imdbId);
-
-  try {
-    const title = await imdbToTitle(imdbId);
-    console.log("🔍 SEARCH:", title);
-
-    const subs = await searchPodnapisi(title);
-
-    console.log("➡️ FOUND:", subs.length);
-    res.json({ subtitles: subs });
-  } catch (err) {
-    console.error("❌ ERROR:", err.message);
-    res.json({ subtitles: [] });
-  }
-});
-
-/* =========================
+/* ===========================
    IMDb → TITLE
-========================= */
+=========================== */
 async function imdbToTitle(imdb) {
-  const url = `https://v2.sg.media-imdb.com/suggestion/${imdb[2]}/${imdb}.json`;
-  const j = await fetch(url).then(r => r.json());
-  return j.d?.[0]?.l || imdb;
+  const html = await fetch(`https://www.imdb.com/title/${imdb}/`, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"
+    }
+  }).then(r => r.text());
+
+  const $ = cheerio.load(html);
+  const title = $("meta[property='og:title']")
+    .attr("content")
+    ?.replace(/\(\d{4}\).*/, "")
+    .trim();
+
+  console.log("🎬 IMDb:", imdb, "→", title);
+  return title;
 }
 
-/* =========================
-   PODNAPISI SEARCH
-========================= */
+/* ===========================
+   SEARCH PODNAPISI.NET
+=========================== */
 async function searchPodnapisi(title) {
-  const searchUrl =
+  const url =
     "https://www.podnapisi.net/sl/subtitles/search?keywords=" +
     encodeURIComponent(title) +
     "&language=sl";
 
-  const html = await fetch(searchUrl, {
-    headers: { "User-Agent": "Mozilla/5.0" }
+  console.log("🔍 SEARCH:", title);
+
+  const html = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"
+    }
   }).then(r => r.text());
 
   const $ = cheerio.load(html);
   const results = [];
 
-  $(".subtitle-entry").each((_, el) => {
-    const link = $(el).find("a.download").attr("href");
-    const name = $(el).find(".subtitle-title").text().trim();
+  $("a[href*='/download']").each((_, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().trim();
 
-    if (!link) return;
+    if (!href || !name) return;
 
     results.push({
-      id: link,
+      id: href,
       lang: "sl",
-      name,
-      url: `https://formio-podnapisinet-addon.onrender.com/download?url=https://www.podnapisi.net${link}`
+      title: name,
+      download: "https://www.podnapisi.net" + href
     });
   });
 
+  console.log("➡️ FOUND:", results.length);
   return results;
 }
 
-/* =========================
+/* ===========================
    DOWNLOAD + UNZIP
-========================= */
-app.get("/download", async (req, res) => {
-  const zipUrl = req.query.url;
-  if (!zipUrl) return res.sendStatus(400);
+=========================== */
+async function downloadSubtitle(url) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"
+    }
+  });
 
-  const zipPath = path.join(TMP_DIR, Date.now() + ".zip");
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const zip = await unzipper.Open.buffer(buffer);
 
-  const zipRes = await fetch(zipUrl);
-  await pipeline(zipRes.body, fs.createWriteStream(zipPath));
+  for (const file of zip.files) {
+    if (file.path.endsWith(".srt")) {
+      return (await file.buffer()).toString("utf-8");
+    }
+  }
 
-  const directory = await unzipper.Open.file(zipPath);
-  const srt = directory.files.find(f => f.path.endsWith(".srt"));
+  return null;
+}
 
-  if (!srt) return res.sendStatus(404);
+/* ===========================
+   SUBTITLES ENDPOINT
+=========================== */
+app.get("/subtitles/:type/:imdb.json", async (req, res) => {
+  try {
+    const title = await imdbToTitle(req.params.imdb);
+    if (!title) return res.json({ subtitles: [] });
 
-  res.setHeader("Content-Type", "application/x-subrip");
-  await pipeline(srt.stream(), res);
+    const found = await searchPodnapisi(title);
+    const out = [];
+
+    for (const s of found.slice(0, 5)) {
+      const text = await downloadSubtitle(s.download);
+      if (!text) continue;
+
+      out.push({
+        id: s.id,
+        lang: "sl",
+        title: s.title,
+        content: text
+      });
+    }
+
+    res.json({ subtitles: out });
+  } catch (e) {
+    console.error("❌ ERROR:", e);
+    res.json({ subtitles: [] });
+  }
 });
 
-/* =========================
+/* ===========================
    START
-========================= */
+=========================== */
 app.listen(PORT, () =>
   console.log("🔥 ADDON RUNNING ON", PORT)
 );
