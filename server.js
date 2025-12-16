@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 import unzipper from "unzipper";
 import cors from "cors";
 
@@ -9,7 +9,7 @@ app.use(cors());
 
 const PORT = process.env.PORT || 10000;
 
-/* ================= MANIFEST ================= */
+/* ========== MANIFEST ========== */
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
@@ -22,26 +22,30 @@ app.get("/manifest.json", (req, res) => {
   });
 });
 
-/* ================= SUBTITLES ================= */
+/* ========== SUBTITLES ========== */
 app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
   try {
     const imdbId = req.params.imdbId;
 
-    // IMDb → naslov (hitro, brez API)
     const imdbHtml = await fetch(`https://www.imdb.com/title/${imdbId}/`).then(r => r.text());
-    const title = imdbHtml.match(/<title>(.*?)<\/title>/)?.[1]?.split("(")[0].trim();
+    const title = imdbHtml.match(/<title>(.*?)<\/title>/)?.[1]?.split("(")[0]?.trim();
 
     if (!title) return res.json({ subtitles: [] });
 
-    const searchUrl = `https://www.podnapisi.net/sl/subtitles/search?keywords=${encodeURIComponent(title)}&language=sl`;
+    const searchUrl =
+      `https://www.podnapisi.net/sl/subtitles/search?keywords=${encodeURIComponent(title)}&language=sl`;
+
     const html = await fetch(searchUrl).then(r => r.text());
     const $ = cheerio.load(html);
 
     const subs = [];
 
     $(".subtitle-entry a").each((i, el) => {
-      if (i >= 5) return; // max 5
+      if (i >= 5) return;
+
       const href = $(el).attr("href");
+      if (!href) return;
+
       const id = href.split("/").pop();
 
       subs.push({
@@ -52,13 +56,13 @@ app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
     });
 
     res.json({ subtitles: subs });
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error("SUB ERROR:", err);
     res.json({ subtitles: [] });
   }
 });
 
-/* ================= DOWNLOAD ================= */
+/* ========== DOWNLOAD ========== */
 app.get("/download/:id.srt", async (req, res) => {
   try {
     const id = req.params.id;
@@ -75,13 +79,13 @@ app.get("/download/:id.srt", async (req, res) => {
     const content = await file.buffer();
     res.setHeader("Content-Type", "application/x-subrip");
     res.send(content);
-  } catch (e) {
-    console.error(e);
-    res.status(500).send("Download error");
+  } catch (err) {
+    console.error("DL ERROR:", err);
+    res.status(500).send("Download failed");
   }
 });
 
-/* ================= RUN ================= */
+/* ========== RUN ========== */
 app.listen(PORT, () => {
   console.log("🔥 ADDON RUNNING ON", PORT);
 });
