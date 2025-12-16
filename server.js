@@ -1,128 +1,105 @@
 import express from "express";
-import cors from "cors";
 import fetch from "node-fetch";
-import * as cheerio from "cheerio";   // <-- FIXED
-import AdmZip from "adm-zip";
+import * as cheerio from "cheerio";
 
 const app = express();
-app.use(cors());
-
 const PORT = process.env.PORT || 10000;
 
-function clean(str) {
-  return str.replace(/\s+/g, " ").trim();
+/* -------------------- HELPERS -------------------- */
+
+function extractMovieTitle(filename = "") {
+  if (!filename) return "";
+
+  let name = filename;
+
+  // odstrani končnico
+  name = name.replace(/\.[^/.]+$/, "");
+
+  // pike -> presledki
+  name = name.replace(/\./g, " ");
+
+  // odreži vse po letnici
+  name = name.replace(/\b(19|20)\d{2}\b.*$/, "");
+
+  return name.trim();
 }
 
-async function searchSubs(title) {
-  try {
-    console.log("🔍 Searching:", title);
-
-    const url =
-      "https://www.podnapisi.net/sl/subtitles/search/?keywords=" +
-      encodeURIComponent(title) +
-      "&language=sl";
-
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    const out = [];
-
-    $(".subtitle-entry").each((i, el) => {
-      const link = $(el).find("a").attr("href");
-      const name = clean($(el).find("a").text());
-      if (!link) return;
-
-      out.push({
-        id: link.split("/").pop(),
-        name,
-        page: "https://www.podnapisi.net" + link,
-      });
-    });
-
-    console.log("➡️ Najdenih:", out.length);
-    return out;
-
-  } catch (err) {
-    console.log("❌ Search error:", err);
-    return [];
-  }
-}
-
-async function downloadSrt(pageUrl) {
-  try {
-    console.log("⬇ Downloading from:", pageUrl);
-
-    const zipUrl = pageUrl + "/download";
-
-    const r = await fetch(zipUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-
-    const buf = Buffer.from(await r.arrayBuffer());
-    const zip = new AdmZip(buf);
-
-    const entries = zip.getEntries();
-
-    for (const f of entries) {
-      if (f.entryName.endsWith(".srt")) {
-        console.log("📦 Extracted:", f.entryName);
-        return zip.readAsText(f);
-      }
-    }
-
-    console.log("❌ ZIP had no SRT");
-    return null;
-
-  } catch (err) {
-    console.log("❌ Download error:", err);
-    return null;
-  }
-}
+/* -------------------- MANIFEST -------------------- */
 
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.formio.podnapisi",
     version: "1.0.0",
-    name: "Podnapisi.NET Stremio Addon",
+    name: "Podnapisi.NET 🇸🇮",
     description: "Slovenski podnapisi iz Podnapisi.NET",
+    resources: ["subtitles"],
     types: ["movie", "series"],
-    idPrefixes: ["tt"],
-    resources: ["subtitles"]
+    idPrefixes: ["tt"]
   });
 });
 
-app.get("/subtitles/:type/:imdb.json", async (req, res) => {
-  const imdb = req.params.imdb;
-  const filename = req.query.filename || "";
-  console.log("🎬 FILENAME:", filename);
+/* -------------------- SUBTITLES -------------------- */
 
-  const guessTitle = filename.replace(/\.\d+p.*$/i, "").replace(/\./g, " ");
+app.get("/subtitles/:type/:imdbId.json", async (req, res) => {
+  try {
+    const filename = req.query.filename || "";
 
-  const searchTitle = guessTitle.trim() || imdb;
+    console.log("🎬 FILENAME:", filename);
 
-  const found = await searchSubs(searchTitle);
+    const title = extractMovieTitle(filename);
+    console.log("🔍 SEARCHING:", title);
 
-  const out = [];
+    if (!title) {
+      return res.json({ subtitles: [] });
+    }
 
-  for (const s of found) {
-    const text = await downloadSrt(s.page);
-    if (!text) continue;
+    const searchUrl =
+      "https://www.podnapisi.net/sl/subtitles/search/?keywords=" +
+      encodeURIComponent(title) +
+      "&language=sl";
 
-    out.push({
-      id: s.id,
-      lang: "sl",
-      title: s.name,
-      subtitles: text
+    const response = await fetch(searchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html"
+      }
     });
-  }
 
-  res.json({ subtitles: out });
+    if (!response.ok) {
+      console.log("❌ Search failed:", response.status);
+      return res.json({ subtitles: [] });
+    }
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+
+    const subs = [];
+
+    $(".subtitle-entry").each((_, el) => {
+      const link = $(el).find("a").attr("href");
+      const name = $(el).find(".title").text().trim();
+
+      if (!link) return;
+
+      subs.push({
+        id: link,
+        lang: "sl",
+        name,
+        url: "https://www.podnapisi.net" + link
+      });
+    });
+
+    console.log("➡️ NAJDENIH:", subs.length);
+
+    res.json({ subtitles: subs });
+  } catch (err) {
+    console.error("💥 ERROR:", err);
+    res.json({ subtitles: [] });
+  }
 });
 
+/* -------------------- START -------------------- */
+
 app.listen(PORT, () => {
-  console.log(`🔥 RUNNING ON ${PORT}`);
+  console.log("🔥 RUNNING ON", PORT);
 });
