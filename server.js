@@ -1,54 +1,39 @@
 import express from "express";
 import cors from "cors";
-import * as cheerio from "cheerio";   // ← FIX: ESM-compatible import
+import * as cheerio from "cheerio";
 import unzipper from "unzipper";
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 10000;
-const BASE_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+const BASE_URL =
+  process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 
-// ---- Simple cache
+const PODNAPISI_BASE = "https://www.podnapisi.net";
+
+/* ================= CACHE ================= */
+const CACHE_TTL = 1000 * 60 * 30;
 const cache = {
-  files: new Map(),
-  searches: new Map()
+  search: new Map(),
+  files: new Map()
 };
-
-const CACHE_TTL_MS = 1000 * 60 * 30;
 
 const now = () => Date.now();
-const cacheGet = (map, key) => {
-  const v = map.get(key);
+const cacheGet = (map, k) => {
+  const v = map.get(k);
   if (!v) return null;
-  if (now() - v.ts > CACHE_TTL_MS) {
-    map.delete(key);
+  if (now() - v.ts > CACHE_TTL) {
+    map.delete(k);
     return null;
   }
-  return v;
+  return v.val;
 };
-const cacheSet = (map, key, value) => {
-  map.set(key, { ...value, ts: now() });
-};
+const cacheSet = (map, k, v) =>
+  map.set(k, { ts: now(), val: v });
 
-// ---- Helpers
-const normalizeLang = (lang) => {
-  const l = (lang || "").toLowerCase();
-  const map = {
-    sl: "slv", slv: "slv", slovene: "slv",
-    en: "eng", eng: "eng", english: "eng",
-    hr: "hrv", hrv: "hrv",
-    sr: "srp", srp: "srp",
-    bs: "bos", bos: "bos",
-    it: "ita", ita: "ita",
-    de: "deu", deu: "deu",
-    fr: "fra", fra: "fra",
-    es: "spa", spa: "spa"
-  };
-  return map[l] || l;
-};
-
-const parseImdbFromStremioId = (id) => {
+/* ================= HELPERS ================= */
+const parseImdb = (id) => {
   const m = id?.match(/tt\d{7,8}/);
   return m ? m[0] : null;
 };
@@ -56,14 +41,14 @@ const parseImdbFromStremioId = (id) => {
 const srtToVtt = (srt) =>
   `WEBVTT\n\n${srt
     .replace(/\r/g, "")
-    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
-  }\n`;
-
-const PODNAPISI_BASE = "https://www.podnapisi.net";
+    .replace(
+      /(\d{2}:\d{2}:\d{2}),(\d{3})/g,
+      "$1.$2"
+    )}\n`;
 
 async function fetchText(url) {
   const r = await fetch(url, {
-    headers: { "user-agent": "Stremio-Podnapisi-Addon" }
+    headers: { "user-agent": "Stremio-Podnapisi" }
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.text();
@@ -71,70 +56,95 @@ async function fetchText(url) {
 
 async function fetchBuffer(url) {
   const r = await fetch(url, {
-    headers: { "user-agent": "Stremio-Podnapisi-Addon" }
+    headers: { "user-agent": "Stremio-Podnapisi" }
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return Buffer.from(await r.arrayBuffer());
 }
 
+/* ================= PARSER (FIXED) ================= */
 function parseSearchResults(html) {
   const $ = cheerio.load(html);
   const out = [];
   const seen = new Set();
 
-  $("a[href*='/download']").each((_, a) => {
-    const href = $(a).attr("href");
-    if (!href || !href.includes("/subtitles/")) return;
+  $("table tbody tr").each((_, tr) => {
+    const row = $(tr);
 
-    const url = href.startsWith("http") ? href : PODNAPISI_BASE + href;
-    if (seen.has(url)) return;
-    seen.add(url);
+    const dl = row
+      .find('a[href$="/download"]')
+      .attr("href");
+    if (!dl) return;
 
-    const row = $(a).closest("tr, .subtitle, .row, li");
-    const text = row.text().toLowerCase();
+    const downloadUrl = dl.startsWith("http")
+      ? dl
+      : PODNAPISI_BASE + dl;
+
+    if (seen.has(downloadUrl)) return;
+    seen.add(downloadUrl);
+
+    const title =
+      row.find("td.title a").first().text().trim() ||
+      "Podnapisi.NET";
 
     let lang = "eng";
-    if (text.includes("slov")) lang = "slv";
-    else if (text.includes("hrv") || text.includes("croat")) lang = "hrv";
-    else if (text.includes("srp") || text.includes("serb")) lang = "srp";
+    const langTitle =
+      row.find("td.language img").attr("title") || "";
 
-    out.push({
-      downloadUrl: url,
-      lang,
-      title: row.find("a").first().text().trim() || "Podnapisi"
-    });
+    if (/slov/i.test(langTitle)) lang = "slv";
+    else if (/hrv|croat/i.test(langTitle)) lang = "hrv";
+    else if (/serb/i.test(langTitle)) lang = "srp";
+    else if (/bos/i.test(langTitle)) lang = "bos";
+    else if (/ital/i.test(langTitle)) lang = "ita";
+    else if (/germ/i.test(langTitle)) lang = "deu";
+
+    out.push({ downloadUrl, title, lang });
   });
 
   return out;
 }
 
-async function podnapisiSearch({ imdb, langs }) {
-  const key = JSON.stringify({ imdb, langs });
-  const cached = cacheGet(cache.searches, key);
-  if (cached) return cached.results;
+/* ================= SEARCH ================= */
+async function podnapisiSearch(imdb) {
+  const cached = cacheGet(cache.search, imdb);
+  if (cached) return cached;
 
   let results = [];
 
-  for (const l of langs) {
-    const url = `${PODNAPISI_BASE}/subtitles/search/advanced?keywords=${imdb}&language=${l}`;
-    const html = await fetchText(url);
-    results.push(...parseSearchResults(html).map(r => ({ ...r, lang: l })));
+  // 1️⃣ advanced
+  const advUrl =
+    `${PODNAPISI_BASE}/subtitles/search/advanced?keywords=${imdb}`;
+  results.push(
+    ...parseSearchResults(await fetchText(advUrl))
+  );
+
+  // 2️⃣ fallback
+  if (results.length === 0) {
+    const plainUrl =
+      `${PODNAPISI_BASE}/subtitles/search/?keywords=${imdb}`;
+    results.push(
+      ...parseSearchResults(await fetchText(plainUrl))
+    );
   }
 
-  cacheSet(cache.searches, key, { results });
-  return results.slice(0, 20);
+  results = results.slice(0, 30);
+  cacheSet(cache.search, imdb, results);
+  return results;
 }
 
-async function downloadSrt(downloadUrl) {
-  const zip = await fetchBuffer(downloadUrl);
+/* ================= DOWNLOAD ================= */
+async function downloadSrt(url) {
+  const zip = await fetchBuffer(url);
   const dir = await unzipper.Open.buffer(zip);
-  const srtFile = dir.files.find(f => f.path.toLowerCase().endsWith(".srt"));
-  if (!srtFile) throw new Error("No SRT in ZIP");
-  return (await srtFile.buffer()).toString("utf-8");
+  const srt = dir.files.find((f) =>
+    f.path.toLowerCase().endsWith(".srt")
+  );
+  if (!srt) throw new Error("No SRT");
+  return (await srt.buffer()).toString("utf8");
 }
 
-// ---- Routes
-app.get("/manifest.json", (_, res) => {
+/* ================= ROUTES ================= */
+app.get("/manifest.json", (_, res) =>
   res.json({
     id: "community.podnapisi.net.subtitles",
     version: "1.0.0",
@@ -142,25 +152,25 @@ app.get("/manifest.json", (_, res) => {
     resources: ["subtitles"],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
-  });
-});
+  })
+);
 
 app.get("/subtitles/:type/:id.json", async (req, res) => {
   try {
-    const imdb = parseImdbFromStremioId(req.params.id);
-    const langs = (req.query.langs || "slv,eng")
-      .split(",")
-      .map(normalizeLang);
+    const imdb = parseImdb(req.params.id);
+    if (!imdb) return res.json({ subtitles: [] });
 
-    const results = await podnapisiSearch({ imdb, langs });
+    const list = await podnapisiSearch(imdb);
 
     res.json({
-      subtitles: results.map((r, i) => {
-        const fid = Buffer.from(r.downloadUrl).toString("base64url");
+      subtitles: list.map((s, i) => {
+        const fid = Buffer.from(
+          s.downloadUrl
+        ).toString("base64url");
         return {
           id: `podnapisi:${i}`,
-          lang: r.lang,
-          title: r.title,
+          lang: s.lang,
+          title: s.title,
           url: `${BASE_URL}/file/${fid}.vtt`
         };
       })
@@ -172,20 +182,26 @@ app.get("/subtitles/:type/:id.json", async (req, res) => {
 
 app.get("/file/:id.vtt", async (req, res) => {
   try {
-    const url = Buffer.from(req.params.id, "base64url").toString();
+    const url = Buffer.from(
+      req.params.id,
+      "base64url"
+    ).toString();
+
     const cached = cacheGet(cache.files, url);
-    if (cached) return res.type("text/vtt").send(cached.vtt);
+    if (cached)
+      return res.type("text/vtt").send(cached);
 
     const srt = await downloadSrt(url);
     const vtt = srtToVtt(srt);
-    cacheSet(cache.files, url, { vtt });
 
+    cacheSet(cache.files, url, vtt);
     res.type("text/vtt").send(vtt);
   } catch (e) {
     res.status(500).send(String(e));
   }
 });
 
+/* ================= START ================= */
 app.listen(PORT, () =>
   console.log(`🔥 Podnapisi addon running on ${PORT}`)
 );
