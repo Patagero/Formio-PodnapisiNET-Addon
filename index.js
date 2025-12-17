@@ -12,38 +12,52 @@ app.get("/manifest.json", (req, res) => {
 
   res.json({
     id: "org.test.slo-subtitles",
-    version: "1.0.3", // ⚠️ VERSION BUMP – OBVEZNO
+    version: "1.0.4", // ⚠️ VERSION BUMP
     name: "Test Slovenski Podnapisi",
-    description: "Testni Stremio subtitle addon (ENG test)",
+    description: "Stremio subtitle addon – forced endpoints",
     resources: ["subtitles"],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
   })
 })
 
-// ===== SUBTITLES =====
+// ===== SUBTITLES (WITH .json) =====
 app.get("/subtitles/:type/:id.json", (req, res) => {
-  const { type, id } = req.params
-
-  console.log("SUBTITLES REQUEST:", type, id, "from", req.ip)
+  console.log("SUBTITLES (.json):", req.params)
 
   res.json({
     subtitles: [
       {
         id: "test-eng",
-        lang: "eng", // ✅ ANGLEŠČINA (Stremio vedno sprejme)
+        lang: "eng",
         url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
       }
     ]
   })
 })
 
-// ===== ROOT (DEBUG) =====
-app.get("/", (req, res) => {
-  res.send("Stremio subtitle addon is running")
+// ===== SUBTITLES (WITHOUT .json) =====
+app.get("/subtitles/:type/:id", (req, res) => {
+  console.log("SUBTITLES (no json):", req.params)
+
+  res.json({
+    subtitles: [
+      {
+        id: "test-eng",
+        lang: "eng",
+        url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
+      }
+    ]
+  })
+})
+
+// ===== CATCH ALL (DEBUG) =====
+app.use((req, res) => {
+  console.log("UNKNOWN REQUEST:", req.method, req.url)
+  res.status(404).send("Not found")
 })
 
 // ===== START =====
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Addon running on http://0.0.0.0:${PORT}`)
+  console.log(`Addon running on port ${PORT}`)
 })
