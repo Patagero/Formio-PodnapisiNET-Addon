@@ -12,12 +12,12 @@ app.get("/manifest.json", (req, res) => {
 
   res.json({
     id: "org.test.slo-subtitles",
-    version: "1.0.0",
+    version: "1.0.2", // ⚠️ VERSION BUMP – OBVEZNO
     name: "Test Slovenski Podnapisi",
-    description: "Minimalni testni subtitle addon",
+    description: "Testni Stremio subtitle addon (force enabled)",
     resources: ["subtitles"],
-    types: ["movie"],
-    idPrefixes: ["tt"]
+    types: ["movie", "series"],   // ⚠️ razširjeno
+    idPrefixes: ["tt"]            // IMDB
   })
 })
 
@@ -25,7 +25,7 @@ app.get("/manifest.json", (req, res) => {
 app.get("/subtitles/:type/:id.json", (req, res) => {
   const { type, id } = req.params
 
-  console.log("SUBTITLE REQUEST:", type, id, "from", req.ip)
+  console.log("SUBTITLES REQUEST:", type, id, "from", req.ip)
 
   res.json({
     subtitles: [
@@ -36,6 +36,11 @@ app.get("/subtitles/:type/:id.json", (req, res) => {
       }
     ]
   })
+})
+
+// ===== ROOT (za debug) =====
+app.get("/", (req, res) => {
+  res.send("Stremio subtitle addon is running")
 })
 
 // ===== START =====
