@@ -1,66 +1,71 @@
-import express from "express"
-import cors from "cors"
+import express from "express";
+import cors from "cors";
 
-const app = express()
-app.use(cors())
+const app = express();
 
-const PORT = process.env.PORT || 7000
+// CORS (Stremio zahteva CORS za HTTP addone) :contentReference[oaicite:1]{index=1}
+app.use(cors());
 
-// ===== MANIFEST =====
+// LOGIRAJ VSE REQUESTE (ključno)
+app.use((req, res, next) => {
+  const ip =
+    req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
+    req.socket.remoteAddress;
+  console.log(
+    "REQ",
+    req.method,
+    req.url,
+    "| ip:",
+    ip,
+    "| ua:",
+    req.headers["user-agent"] || "-"
+  );
+  next();
+});
+
+const PORT = process.env.PORT || 7000;
+
+// MANIFEST (resources kot objekti + nov id + nov version)
 app.get("/manifest.json", (req, res) => {
-  console.log("MANIFEST REQUEST")
-
   res.json({
-    id: "org.test.force-subtitles",
-    version: "1.1.0", // ⚠️ BUMP
-    name: "Test Force Subtitles",
-    description: "Forces Stremio to call subtitle addons",
-    resources: ["subtitles", "streams"], // 🔥 KLJUČNO
+    id: "org.test.force-subtitles.debug",
+    version: "1.2.0",
+    name: "Force Subtitles DEBUG",
+    description: "Debug addon: logs requests, forces Stremio subtitle calls",
+    resources: [
+      { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] },
+      { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] }
+    ],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
-  })
-})
+  });
+});
 
-// ===== DUMMY STREAMS =====
-app.get("/streams/:type/:id.json", (req, res) => {
-  console.log("STREAMS REQUEST:", req.params)
+// DUMMY STREAM endpoint (Stremio uporablja /stream/...) :contentReference[oaicite:2]{index=2}
+app.get("/stream/:type/:id.json", (req, res) => {
+  res.json({ streams: [] });
+});
+app.get("/stream/:type/:id", (req, res) => {
+  res.json({ streams: [] });
+});
 
-  // Namerno vrnemo PRAZEN seznam
-  res.json({
-    streams: []
-  })
-})
+// SUBTITLES endpoint (oba formata)
+const subsResponse = {
+  subtitles: [
+    {
+      id: "test-eng",
+      lang: "eng",
+      url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
+    }
+  ]
+};
 
-// ===== SUBTITLES (.json) =====
-app.get("/subtitles/:type/:id.json", (req, res) => {
-  console.log("SUBTITLES REQUEST (.json):", req.params)
+app.get("/subtitles/:type/:id.json", (req, res) => res.json(subsResponse));
+app.get("/subtitles/:type/:id", (req, res) => res.json(subsResponse));
 
-  res.json({
-    subtitles: [
-      {
-        id: "test-eng",
-        lang: "eng",
-        url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
-      }
-    ]
-  })
-})
-
-// ===== SUBTITLES (no .json) =====
-app.get("/subtitles/:type/:id", (req, res) => {
-  console.log("SUBTITLES REQUEST (no json):", req.params)
-
-  res.json({
-    subtitles: [
-      {
-        id: "test-eng",
-        lang: "eng",
-        url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
-      }
-    ]
-  })
-})
+// Ping
+app.get("/ping", (req, res) => res.send("pong"));
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Addon running on port ${PORT}`)
-})
+  console.log(`Addon running on port ${PORT}`);
+});
