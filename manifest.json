@@ -1,14 +1,14 @@
-{
-  "id": "org.formio.podnapisi",
-  "version": "1.0.0",
-  "name": "Podnapisi.NET",
-  "description": "Slovenski podnapisi iz Podnapisi.NET",
-  "idPrefixes": ["tt"],
-  "types": ["movie", "series"],
-  "resources": [
-    {
-      "name": "subtitles",
-      "types": ["movie", "series"]
+app.get("/manifest.json", (_, res) =>
+  res.json({
+    id: "community.podnapisi.net.subtitles",
+    version: "1.0.1",
+    name: "Podnapisi.NET (no browser)",
+    description: "Slovenian subtitles from Podnapisi.NET",
+    resources: ["subtitles"],
+    types: ["movie", "series"],
+    idPrefixes: ["tt", "movie:tt", "series:tt"],
+    behaviorHints: {
+      configurable: false
     }
-  ]
-}
+  })
+);
