@@ -1,0 +1,9 @@
+{
+  "id": "community.podnapisi.net.subtitles",
+  "version": "1.0.1",
+  "name": "Podnapisi.NET (no browser)",
+  "description": "Slovenian subtitles from Podnapisi.NET",
+  "resources": ["subtitles"],
+  "types": ["movie", "series"],
+  "idPrefixes": ["tt", "movie:tt", "series:tt"]
+}
