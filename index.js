@@ -2,15 +2,18 @@ import express from "express";
 import cors from "cors";
 
 const app = express();
-
-// CORS (Stremio zahteva CORS za HTTP addone) :contentReference[oaicite:1]{index=1}
 app.use(cors());
 
-// LOGIRAJ VSE REQUESTE (ključno)
+const PORT = process.env.PORT || 7000;
+
+/* =====================
+   GLOBAL REQUEST LOG
+===================== */
 app.use((req, res, next) => {
   const ip =
     req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
     req.socket.remoteAddress;
+
   console.log(
     "REQ",
     req.method,
@@ -23,25 +26,27 @@ app.use((req, res, next) => {
   next();
 });
 
-const PORT = process.env.PORT || 7000;
-
-// MANIFEST (resources kot objekti + nov id + nov version)
+/* =====================
+   MANIFEST
+===================== */
 app.get("/manifest.json", (req, res) => {
   res.json({
-    id: "org.test.force-subtitles.debug",
-    version: "1.2.0",
-    name: "Force Subtitles DEBUG",
-    description: "Debug addon: logs requests, forces Stremio subtitle calls",
+    id: "org.test.force-subtitles",
+    version: "1.3.0", // ⚠️ VERSION BUMP (OBVEZNO)
+    name: "Test Force Subtitles",
+    description: "Working Stremio subtitle addon (wildcard fix)",
     resources: [
-      { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] },
-      { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] }
+      { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
+      { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] }
     ],
     types: ["movie", "series"],
     idPrefixes: ["tt"]
   });
 });
 
-// DUMMY STREAM endpoint (Stremio uporablja /stream/...) :contentReference[oaicite:2]{index=2}
+/* =====================
+   DUMMY STREAMS
+===================== */
 app.get("/stream/:type/:id.json", (req, res) => {
   res.json({ streams: [] });
 });
@@ -49,23 +54,42 @@ app.get("/stream/:type/:id", (req, res) => {
   res.json({ streams: [] });
 });
 
-// SUBTITLES endpoint (oba formata)
-const subsResponse = {
-  subtitles: [
-    {
-      id: "test-eng",
-      lang: "eng",
-      url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
-    }
-  ]
-};
+/* =====================
+   SUBTITLES – WILDCARD
+   (ključno!)
+===================== */
+app.get("/subtitles/:type/:id/*", (req, res) => {
+  const { type, id } = req.params;
 
-app.get("/subtitles/:type/:id.json", (req, res) => res.json(subsResponse));
-app.get("/subtitles/:type/:id", (req, res) => res.json(subsResponse));
+  console.log("SUBTITLES WILDCARD HIT:", {
+    type,
+    id,
+    extraPath: req.params[0],
+    query: req.query
+  });
 
-// Ping
-app.get("/ping", (req, res) => res.send("pong"));
+  res.json({
+    subtitles: [
+      {
+        id: "test-eng",
+        lang: "eng",
+        url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
+      }
+    ]
+  });
+});
 
+/* =====================
+   FALLBACK (DEBUG)
+===================== */
+app.use((req, res) => {
+  console.log("UNHANDLED:", req.method, req.url);
+  res.status(404).send("Not found");
+});
+
+/* =====================
+   START
+===================== */
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Addon running on port ${PORT}`);
 });
