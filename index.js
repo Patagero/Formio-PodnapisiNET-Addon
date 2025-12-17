@@ -7,7 +7,7 @@ app.use(cors());
 const PORT = process.env.PORT || 7000;
 
 /* =====================
-   GLOBAL REQUEST LOG
+   GLOBAL LOG (debug)
 ===================== */
 app.use((req, res, next) => {
   const ip =
@@ -31,10 +31,10 @@ app.use((req, res, next) => {
 ===================== */
 app.get("/manifest.json", (req, res) => {
   res.json({
-    id: "org.test.force-subtitles",
-    version: "1.3.0", // ⚠️ VERSION BUMP (OBVEZNO)
-    name: "Test Force Subtitles",
-    description: "Working Stremio subtitle addon (wildcard fix)",
+    id: "org.podnapisi.sl",
+    version: "1.4.0", // ⚠️ VERSION BUMP
+    name: "Podnapisi.NET (SL)",
+    description: "Slovenski podnapisi iz Podnapisi.NET",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
       { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] }
@@ -56,35 +56,31 @@ app.get("/stream/:type/:id", (req, res) => {
 
 /* =====================
    SUBTITLES – WILDCARD
-   (ključno!)
 ===================== */
 app.get("/subtitles/:type/:id/*", (req, res) => {
   const { type, id } = req.params;
 
-  console.log("SUBTITLES WILDCARD HIT:", {
+  console.log("SUBTITLES REQUEST:", {
     type,
-    id,
-    extraPath: req.params[0],
-    query: req.query
+    imdb: id,
+    extraPath: req.params[0]
   });
 
-  res.json({
-    subtitles: [
-      {
-        id: "test-eng",
-        lang: "eng",
-        url: "https://raw.githubusercontent.com/andreyvit/subtitle-tools/master/sample.srt"
-      }
-    ]
-  });
-});
+  // HARD-CODED TEST: Titanic (1997) – Podnapisi.NET ID DGJI
+  if (id === "tt0120338") {
+    return res.json({
+      subtitles: [
+        {
+          id: "podnapisi-dgji",
+          lang: "slv", // Slovenščina (ISO-639-2)
+          url: "https://www.podnapisi.net/subtitles/download/DGJI"
+        }
+      ]
+    });
+  }
 
-/* =====================
-   FALLBACK (DEBUG)
-===================== */
-app.use((req, res) => {
-  console.log("UNHANDLED:", req.method, req.url);
-  res.status(404).send("Not found");
+  // Za vse ostale filme trenutno nič
+  res.json({ subtitles: [] });
 });
 
 /* =====================
