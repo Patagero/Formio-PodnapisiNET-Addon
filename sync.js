@@ -26,42 +26,33 @@ function buildQuery(item) {
   if (item.type === "movie") {
     return item.year ? `${item.title} ${item.year}` : item.title;
   }
-
   if (item.type === "series") {
     return `${item.title} S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`;
   }
-
   return item.title;
 }
 
-/* ================= SEARCH ================= */
+/* ================= SEARCH (ROBUST) ================= */
 
 async function findSubtitlePage(page, item) {
   const query = buildQuery(item);
   const searchUrl =
-    "https://www.podnapisi.net/sl/search?s=" +
-    encodeURIComponent(query);
+    "https://www.podnapisi.net/sl/search?s=" + encodeURIComponent(query);
 
   console.log("🔍 Searching:", query);
 
   await page.goto(searchUrl, { waitUntil: "networkidle" });
 
-  const subtitleUrl = await page.evaluate((lang) => {
-    const links = Array.from(document.querySelectorAll("a"))
-      .filter(a =>
-        a.href.includes("/subtitles/") &&
-        (
-          a.textContent.toLowerCase().includes("slov") ||
-          a.textContent.toLowerCase().includes(lang)
-        )
-      );
-    return links.length ? links[0].href : null;
-  }, item.lang);
+  // počakaj na vsaj en rezultat, ki vodi na /subtitles/
+  await page.waitForSelector("a[href*='/subtitles/']", { timeout: 10000 });
 
-  if (!subtitleUrl) {
-    throw new Error("No subtitles found");
-  }
+  // vzemi PRVI /subtitles/ link (najbolj robustno)
+  const subtitleUrl = await page.evaluate(() => {
+    const a = document.querySelector("a[href*='/subtitles/']");
+    return a ? a.href : null;
+  });
 
+  if (!subtitleUrl) throw new Error("No subtitle result links found");
   return subtitleUrl;
 }
 
@@ -100,9 +91,7 @@ async function run() {
       page.waitForEvent("download"),
       page.evaluate(() => {
         const el = Array.from(document.querySelectorAll("a, button"))
-          .find(e =>
-            (e.textContent || "").toLowerCase().includes("prenes")
-          );
+          .find(e => (e.textContent || "").toLowerCase().includes("prenes"));
         if (!el) throw new Error("Download button not found");
         el.click();
       })
