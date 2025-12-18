@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import fetch from "node-fetch";
+import unzipper from "unzipper";
 
 const app = express();
 app.use(cors());
@@ -7,80 +9,86 @@ app.use(cors());
 const PORT = process.env.PORT || 7000;
 
 /* =====================
-   GLOBAL LOG (debug)
-===================== */
-app.use((req, res, next) => {
-  const ip =
-    req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
-    req.socket.remoteAddress;
-
-  console.log(
-    "REQ",
-    req.method,
-    req.url,
-    "| ip:",
-    ip,
-    "| ua:",
-    req.headers["user-agent"] || "-"
-  );
-  next();
-});
-
-/* =====================
    MANIFEST
 ===================== */
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.podnapisi.sl",
-    version: "1.4.0", // ⚠️ VERSION BUMP
+    version: "1.5.0",
     name: "Podnapisi.NET (SL)",
-    description: "Slovenski podnapisi iz Podnapisi.NET",
+    description: "Slovenski podnapisi iz Podnapisi.NET (proxy)",
     resources: [
-      { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
-      { name: "subtitles", types: ["movie", "series"], idPrefixes: ["tt"] }
+      { name: "stream", types: ["movie"], idPrefixes: ["tt"] },
+      { name: "subtitles", types: ["movie"], idPrefixes: ["tt"] }
     ],
-    types: ["movie", "series"],
+    types: ["movie"],
     idPrefixes: ["tt"]
   });
 });
 
 /* =====================
-   DUMMY STREAMS
+   DUMMY STREAM
 ===================== */
-app.get("/stream/:type/:id.json", (req, res) => {
-  res.json({ streams: [] });
-});
 app.get("/stream/:type/:id", (req, res) => {
   res.json({ streams: [] });
 });
 
 /* =====================
-   SUBTITLES – WILDCARD
+   SUBTITLES
 ===================== */
-app.get("/subtitles/:type/:id/*", (req, res) => {
-  const { type, id } = req.params;
+app.get("/subtitles/:type/:id/*", async (req, res) => {
+  const { id } = req.params;
 
-  console.log("SUBTITLES REQUEST:", {
-    type,
-    imdb: id,
-    extraPath: req.params[0]
-  });
-
-  // HARD-CODED TEST: Titanic (1997) – Podnapisi.NET ID DGJI
-  if (id === "tt0120338") {
-    return res.json({
-      subtitles: [
-        {
-          id: "podnapisi-dgji",
-          lang: "slv", // Slovenščina (ISO-639-2)
-          url: "https://www.podnapisi.net/subtitles/download/DGJI"
-        }
-      ]
-    });
+  if (id !== "tt0120338") {
+    return res.json({ subtitles: [] });
   }
 
-  // Za vse ostale filme trenutno nič
-  res.json({ subtitles: [] });
+  res.json({
+    subtitles: [
+      {
+        id: "titanic-dgji",
+        lang: "slv",
+        url: `https://${req.headers.host}/subtitle/DGJI.srt`
+      }
+    ]
+  });
+});
+
+/* =====================
+   PROXY: ZIP → SRT
+===================== */
+app.get("/subtitle/DGJI.srt", async (req, res) => {
+  try {
+    const zipUrl = "https://www.podnapisi.net/subtitles/download/DGJI";
+
+    const response = await fetch(zipUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.podnapisi.net/"
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(500).send("Failed to fetch ZIP");
+    }
+
+    const zipStream = response.body.pipe(unzipper.Parse());
+
+    for await (const entry of zipStream) {
+      if (entry.path.endsWith(".srt")) {
+        res.setHeader("Content-Type", "application/x-subrip");
+        entry.pipe(res);
+        return;
+      } else {
+        entry.autodrain();
+      }
+    }
+
+    res.status(404).send("SRT not found in ZIP");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Subtitle proxy error");
+  }
 });
 
 /* =====================
