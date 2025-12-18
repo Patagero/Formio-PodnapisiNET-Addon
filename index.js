@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import unzipper from "unzipper";
-import { Readable } from "stream";
 
 const app = express();
 app.use(cors());
@@ -9,7 +8,7 @@ app.use(cors());
 const PORT = process.env.PORT || 7000;
 
 /* =====================
-   LOG
+   LOG (debug)
 ===================== */
 app.use((req, res, next) => {
   const ip =
@@ -34,9 +33,9 @@ app.use((req, res, next) => {
 app.get("/manifest.json", (req, res) => {
   res.json({
     id: "org.podnapisi.sl",
-    version: "2.1.0", // 🔥 VERSION BUMP
+    version: "2.2.0", // 🔥 FINAL FIX
     name: "Podnapisi.NET (Slovenščina)",
-    description: "Slovenski podnapisi iz Podnapisi.NET (proxy + unzip)",
+    description: "Slovenski podnapisi iz Podnapisi.NET (proxy, unzip, stable)",
     resources: [
       { name: "stream", types: ["movie"], idPrefixes: ["tt"] },
       { name: "subtitles", types: ["movie"], idPrefixes: ["tt"] }
@@ -57,11 +56,12 @@ app.get("/stream/:type/:id.json", (req, res) => {
 });
 
 /* =====================
-   SUBTITLES
+   SUBTITLES (Stremio → addon)
 ===================== */
 app.get("/subtitles/:type/:id/*", (req, res) => {
   const { id } = req.params;
 
+  // TEST: Titanic (1997)
   if (id === "tt0120338") {
     return res.json({
       subtitles: [
@@ -78,39 +78,48 @@ app.get("/subtitles/:type/:id/*", (req, res) => {
 });
 
 /* =====================
-   PROXY: ZIP → SRT
+   PROXY: Podnapisi.NET ZIP → SRT
 ===================== */
 app.get("/subtitle/DGJI.srt", async (req, res) => {
   try {
-    const zipUrl = "https://www.podnapisi.net/subtitles/download/DGJI";
+    // ⚠️ PRAVI URL (JEZIK JE OBVEZEN)
+    const zipUrl = "https://www.podnapisi.net/sl/subtitles/download/DGJI";
 
     const response = await fetch(zipUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.podnapisi.net/"
+        "Referer": "https://www.podnapisi.net/sl/"
       }
     });
 
-    if (!response.ok || !response.body) {
+    if (!response.ok) {
       return res.status(500).send("Failed to fetch subtitle ZIP");
     }
 
-    // 🔥 KLJUČNI FIX: Web stream → Node stream
-    const nodeStream = Readable.fromWeb(response.body);
+    const contentType = response.headers.get("content-type") || "";
 
-    const zipStream = nodeStream.pipe(unzipper.Parse());
-
-    for await (const entry of zipStream) {
-      if (entry.path.toLowerCase().endsWith(".srt")) {
-        res.setHeader("Content-Type", "application/x-subrip");
-        entry.pipe(res);
-        return;
-      } else {
-        entry.autodrain();
-      }
+    // Če Podnapisi vrne HTML (login / redirect), ne ZIP
+    if (!contentType.includes("zip")) {
+      const preview = (await response.text()).slice(0, 200);
+      console.error("NOT ZIP RESPONSE:", preview);
+      return res.status(500).send("Podnapisi.NET did not return ZIP");
     }
 
-    res.status(404).send("SRT not found in ZIP");
+    // 🔥 BUFFER UNZIP – najbolj stabilno
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const directory = await unzipper.Open.buffer(buffer);
+
+    const srtFile = directory.files.find(f =>
+      f.path.toLowerCase().endsWith(".srt")
+    );
+
+    if (!srtFile) {
+      return res.status(404).send("SRT not found in ZIP");
+    }
+
+    res.setHeader("Content-Type", "application/x-subrip");
+    srtFile.stream().pipe(res);
+
   } catch (err) {
     console.error("SUBTITLE PROXY ERROR:", err);
     res.status(500).send("Subtitle proxy error");
