@@ -1,5 +1,4 @@
 import fs from "fs/promises";
-import fsSync from "fs";
 import path from "path";
 import unzipper from "unzipper";
 import { chromium } from "playwright";
@@ -8,19 +7,17 @@ const CONFIG_PATH = "./sync-config.json";
 
 /* ================= HELPERS ================= */
 
-async function ensureDir(p) {
-  await fs.mkdir(p, { recursive: true });
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
 }
 
-async function readJson(p) {
-  return JSON.parse(await fs.readFile(p, "utf8"));
+async function readJson(file) {
+  return JSON.parse(await fs.readFile(file, "utf8"));
 }
 
 async function extractFirstSrt(zipPath) {
-  const directory = await unzipper.Open.file(zipPath);
-  const srt = directory.files.find(f =>
-    f.path.toLowerCase().endsWith(".srt")
-  );
+  const zip = await unzipper.Open.file(zipPath);
+  const srt = zip.files.find(f => f.path.toLowerCase().endsWith(".srt"));
   if (!srt) throw new Error("No .srt found in ZIP");
   return await srt.buffer();
 }
@@ -30,7 +27,7 @@ function buildQuery(item) {
     return item.year ? `${item.title} ${item.year}` : item.title;
   }
 
-  if (item.type === "series" && item.season && item.episode) {
+  if (item.type === "series") {
     return `${item.title} S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`;
   }
 
@@ -58,12 +55,11 @@ async function findSubtitlePage(page, item) {
           a.textContent.toLowerCase().includes(lang)
         )
       );
-
     return links.length ? links[0].href : null;
   }, item.lang);
 
   if (!subtitleUrl) {
-    throw new Error("No subtitles found via search");
+    throw new Error("No subtitles found");
   }
 
   return subtitleUrl;
@@ -78,13 +74,10 @@ async function run() {
 
   await ensureDir(tmpDir);
 
-  // 🔒 STABILEN PLAYWRIGHT ZA RENDER
-  const executablePath =
-    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
+  console.log("🚀 Starting Playwright (Render safe)");
 
   const browser = await chromium.launch({
     headless: true,
-    executablePath,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -103,7 +96,6 @@ async function run() {
 
     await page.goto(subtitlePage, { waitUntil: "networkidle" });
 
-    // klik na "Prenesi"
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.evaluate(() => {
@@ -111,7 +103,7 @@ async function run() {
           .find(e =>
             (e.textContent || "").toLowerCase().includes("prenes")
           );
-        if (!el) throw new Error("Download trigger not found");
+        if (!el) throw new Error("Download button not found");
         el.click();
       })
     ]);
@@ -137,13 +129,14 @@ async function run() {
     const srtPath = path.join(destDir, `${it.lang}.srt`);
     await fs.writeFile(srtPath, srtBuffer);
 
-    console.log("Saved:", srtPath);
+    console.log("✅ Saved:", srtPath);
   }
 
   await browser.close();
+  console.log("🏁 SYNC DONE");
 }
 
 run().catch(err => {
-  console.error("SYNC FAILED:", err);
+  console.error("❌ SYNC FAILED:", err);
   process.exit(1);
 });
