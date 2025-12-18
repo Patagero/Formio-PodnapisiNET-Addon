@@ -6,6 +6,8 @@ import { chromium } from "playwright";
 
 const CONFIG_PATH = "./sync-config.json";
 
+/* ================= HELPERS ================= */
+
 async function ensureDir(p) {
   await fs.mkdir(p, { recursive: true });
 }
@@ -16,8 +18,10 @@ async function readJson(p) {
 
 async function extractFirstSrt(zipPath) {
   const directory = await unzipper.Open.file(zipPath);
-  const srt = directory.files.find(f => f.path.toLowerCase().endsWith(".srt"));
-  if (!srt) throw new Error("No .srt in ZIP");
+  const srt = directory.files.find(f =>
+    f.path.toLowerCase().endsWith(".srt")
+  );
+  if (!srt) throw new Error("No .srt found in ZIP");
   return await srt.buffer();
 }
 
@@ -25,34 +29,47 @@ function buildQuery(item) {
   if (item.type === "movie") {
     return item.year ? `${item.title} ${item.year}` : item.title;
   }
-  // series
-  if (item.season && item.episode) {
+
+  if (item.type === "series" && item.season && item.episode) {
     return `${item.title} S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`;
   }
+
   return item.title;
 }
 
+/* ================= SEARCH ================= */
+
 async function findSubtitlePage(page, item) {
   const query = buildQuery(item);
-  const url = `https://www.podnapisi.net/sl/search?s=${encodeURIComponent(query)}`;
+  const searchUrl =
+    "https://www.podnapisi.net/sl/search?s=" +
+    encodeURIComponent(query);
+
   console.log("🔍 Searching:", query);
 
-  await page.goto(url, { waitUntil: "networkidle" });
+  await page.goto(searchUrl, { waitUntil: "networkidle" });
 
-  // Najdi prvi slovenski zadetek
   const subtitleUrl = await page.evaluate((lang) => {
     const links = Array.from(document.querySelectorAll("a"))
       .filter(a =>
         a.href.includes("/subtitles/") &&
-        (a.textContent.toLowerCase().includes("slov") ||
-         a.textContent.toLowerCase().includes(lang))
+        (
+          a.textContent.toLowerCase().includes("slov") ||
+          a.textContent.toLowerCase().includes(lang)
+        )
       );
+
     return links.length ? links[0].href : null;
   }, item.lang);
 
-  if (!subtitleUrl) throw new Error("No subtitles found");
+  if (!subtitleUrl) {
+    throw new Error("No subtitles found via search");
+  }
+
   return subtitleUrl;
 }
+
+/* ================= MAIN ================= */
 
 async function run() {
   const cfg = await readJson(CONFIG_PATH);
@@ -61,7 +78,20 @@ async function run() {
 
   await ensureDir(tmpDir);
 
-  const browser = await chromium.launch({ headless: true });
+  // 🔒 STABILEN PLAYWRIGHT ZA RENDER
+  const executablePath =
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
+
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  });
+
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 
@@ -73,12 +103,14 @@ async function run() {
 
     await page.goto(subtitlePage, { waitUntil: "networkidle" });
 
-    // Sproži download (klik kjerkoli piše Prenesi)
+    // klik na "Prenesi"
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.evaluate(() => {
         const el = Array.from(document.querySelectorAll("a, button"))
-          .find(e => (e.textContent || "").toLowerCase().includes("prenes"));
+          .find(e =>
+            (e.textContent || "").toLowerCase().includes("prenes")
+          );
         if (!el) throw new Error("Download trigger not found");
         el.click();
       })
