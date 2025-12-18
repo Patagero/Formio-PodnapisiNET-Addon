@@ -1,9 +1,11 @@
 import fs from "fs/promises";
 import path from "path";
 import unzipper from "unzipper";
-import { chromium } from "playwright";
+import fetch from "node-fetch";
+import cheerio from "cheerio";
 
 const CONFIG_PATH = "./sync-config.json";
+const BASE = "https://www.podnapisi.net";
 
 /* ================= HELPERS ================= */
 
@@ -15,8 +17,8 @@ async function readJson(file) {
   return JSON.parse(await fs.readFile(file, "utf8"));
 }
 
-async function extractFirstSrt(zipPath) {
-  const zip = await unzipper.Open.file(zipPath);
+async function extractFirstSrt(zipBuffer) {
+  const zip = await unzipper.Open.buffer(zipBuffer);
   const srt = zip.files.find(f => f.path.toLowerCase().endsWith(".srt"));
   if (!srt) throw new Error("No .srt found in ZIP");
   return await srt.buffer();
@@ -32,62 +34,63 @@ function buildQuery(item) {
   return item.title;
 }
 
+/* ================= SEARCH ================= */
+
+async function findSubtitleUrl(query) {
+  const res = await fetch(
+    `${BASE}/sl/search?s=${encodeURIComponent(query)}`,
+    { headers: { "User-Agent": "Mozilla/5.0" } }
+  );
+
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  const link = $("a[href^='/sl/subtitles/']")
+    .map((_, a) => $(a).attr("href"))
+    .get()
+    .find(h =>
+      h &&
+      !h.includes("/search/") &&
+      h.split("/").pop().length === 4
+    );
+
+  if (!link) throw new Error("No subtitle found");
+
+  return BASE + link;
+}
+
+async function downloadZip(subtitlePageUrl) {
+  const page = await fetch(subtitlePageUrl, {
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
+  const html = await page.text();
+  const $ = cheerio.load(html);
+
+  const zipPath = $("a[href$='.zip']").attr("href");
+  if (!zipPath) throw new Error("ZIP link not found");
+
+  const zipRes = await fetch(BASE + zipPath, {
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
+
+  return Buffer.from(await zipRes.arrayBuffer());
+}
+
 /* ================= MAIN ================= */
 
 async function run() {
   const cfg = await readJson(CONFIG_PATH);
   const outDir = cfg.outDir || "data";
-  const tmpDir = "./tmp";
-
-  await ensureDir(tmpDir);
-
-  console.log("🚀 Starting REAL browser (non-headless)");
-
-  const browser = await chromium.launch({
-    headless: false, // ⬅️ KLJUČNO
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox"
-    ]
-  });
-
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-    acceptDownloads: true
-  });
-
-  const page = await context.newPage();
 
   for (const it of cfg.items) {
     const query = buildQuery(it);
-    console.log(`SYNC ${it.type} | ${query}`);
+    console.log("🔍 Searching:", query);
 
-    await page.goto(
-      "https://www.podnapisi.net/sl/search?s=" + encodeURIComponent(query),
-      { waitUntil: "networkidle" }
-    );
+    const subtitlePage = await findSubtitleUrl(query);
+    console.log("Found:", subtitlePage);
 
-    // počakaj, da se izriše tabela
-    await page.waitForSelector("table", { timeout: 15000 });
-
-    // klikni PRVI pravi rezultat (človeško)
-    await page.click(
-      "table tbody tr td a[href^='/sl/subtitles/']:not([href*='search'])"
-    );
-
-    console.log("Opened subtitle detail page");
-
-    // klikni Prenesi
-    const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.click("text=/Prenesi/i")
-    ]);
-
-    const zipPath = path.join(tmpDir, await download.suggestedFilename());
-    await download.saveAs(zipPath);
-
-    const srtBuffer = await extractFirstSrt(zipPath);
+    const zipBuffer = await downloadZip(subtitlePage);
+    const srtBuffer = await extractFirstSrt(zipBuffer);
 
     const destDir = path.join(outDir, it.imdb);
     await ensureDir(destDir);
@@ -98,7 +101,6 @@ async function run() {
     console.log("✅ Saved:", srtPath);
   }
 
-  await browser.close();
   console.log("🏁 SYNC DONE");
 }
 
