@@ -32,27 +32,36 @@ function buildQuery(item) {
   return item.title;
 }
 
-/* ================= SEARCH (ROBUST) ================= */
+/* ================= SEARCH (FINAL & ROBUST) ================= */
 
 async function findSubtitlePage(page, item) {
   const query = buildQuery(item);
   const searchUrl =
-    "https://www.podnapisi.net/sl/search?s=" + encodeURIComponent(query);
+    "https://www.podnapisi.net/sl/search?s=" +
+    encodeURIComponent(query);
 
   console.log("🔍 Searching:", query);
 
   await page.goto(searchUrl, { waitUntil: "networkidle" });
 
-  // počakaj na vsaj en rezultat, ki vodi na /subtitles/
-  await page.waitForSelector("a[href*='/subtitles/']", { timeout: 10000 });
-
-  // vzemi PRVI /subtitles/ link (najbolj robustno)
   const subtitleUrl = await page.evaluate(() => {
-    const a = document.querySelector("a[href*='/subtitles/']");
-    return a ? a.href : null;
+    const links = Array.from(
+      document.querySelectorAll("a[href^='/sl/subtitles/']")
+    )
+      .map(a => a.getAttribute("href"))
+      .filter(href =>
+        /^\/sl\/subtitles\/.+\/[A-Z0-9]{4}$/.test(href)
+      );
+
+    return links.length
+      ? "https://www.podnapisi.net" + links[0]
+      : null;
   });
 
-  if (!subtitleUrl) throw new Error("No subtitle result links found");
+  if (!subtitleUrl) {
+    throw new Error("No valid subtitle result found");
+  }
+
   return subtitleUrl;
 }
 
@@ -91,7 +100,9 @@ async function run() {
       page.waitForEvent("download"),
       page.evaluate(() => {
         const el = Array.from(document.querySelectorAll("a, button"))
-          .find(e => (e.textContent || "").toLowerCase().includes("prenes"));
+          .find(e =>
+            (e.textContent || "").toLowerCase().includes("prenes")
+          );
         if (!el) throw new Error("Download button not found");
         el.click();
       })
