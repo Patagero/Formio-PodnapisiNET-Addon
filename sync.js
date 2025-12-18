@@ -32,7 +32,7 @@ function buildQuery(item) {
   return item.title;
 }
 
-/* ================= SEARCH (FINAL & ROBUST) ================= */
+/* ================= SEARCH (FINAL, DYNAMIC-SAFE) ================= */
 
 async function findSubtitlePage(page, item) {
   const query = buildQuery(item);
@@ -42,20 +42,30 @@ async function findSubtitlePage(page, item) {
 
   console.log("🔍 Searching:", query);
 
-  await page.goto(searchUrl, { waitUntil: "networkidle" });
+  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+
+  // Podnapisi.NET rezultate naloži dinamično – počakamo malo
+  await page.waitForTimeout(2000);
 
   const subtitleUrl = await page.evaluate(() => {
+    // rezultati so v tabeli
     const links = Array.from(
-      document.querySelectorAll("a[href^='/sl/subtitles/']")
-    )
-      .map(a => a.getAttribute("href"))
-      .filter(href =>
-        /^\/sl\/subtitles\/.+\/[A-Z0-9]{4}$/.test(href)
-      );
+      document.querySelectorAll("table a[href]")
+    );
 
-    return links.length
-      ? "https://www.podnapisi.net" + links[0]
-      : null;
+    for (const a of links) {
+      const href = a.getAttribute("href");
+      if (
+        href &&
+        href.startsWith("/sl/subtitles/") &&
+        !href.includes("/search/") &&
+        href.split("/").pop().length === 4
+      ) {
+        return "https://www.podnapisi.net" + href;
+      }
+    }
+
+    return null;
   });
 
   if (!subtitleUrl) {
