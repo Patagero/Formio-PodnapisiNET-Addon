@@ -1,9 +1,10 @@
 {
   "name": "stremio-podnapisi-addon",
-  "version": "2.2.0",
+  "version": "2.3.1",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "sync": "node sync.js"
   },
   "engines": {
     "node": "20.x"
@@ -11,6 +12,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
-    "unzipper": "^0.10.14"
+    "unzipper": "^0.10.14",
+    "puppeteer-core": "^24.10.2",
+    "@sparticuz/chromium": "^131.0.1"
   }
 }
