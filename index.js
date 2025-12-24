@@ -1,72 +1,77 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 10000;
+const TMDB_KEY = process.env.TMDB_API_KEY;
 
 /* ================= MANIFEST ================= */
 
 const manifest = {
-  id: "org.podnapisi.filename",
-  version: "4.0.0",
-  name: "Podnapisi.NET (filename fallback)",
-  description: "Slovenski podnapisi – IMDB → filename → title",
+  id: "org.podnapisi.tmdb",
+  version: "4.2.2",
+  name: "Podnapisi.NET (TMDB resolve)",
+  description: "IMDB → TMDB → Title → Podnapisi.NET",
   resources: ["subtitles"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
-app.get("/manifest.json", (_, res) => {
-  res.json(manifest);
-});
+app.get("/manifest.json", (_, res) => res.json(manifest));
 
 /* ================= HELPERS ================= */
 
-function cleanTitle(str = "") {
-  return str
-    .replace(/\.[^.]+$/, "")              // remove extension
-    .replace(/[\.\-_]/g, " ")
-    .replace(/\b(2160p|1080p|720p|WEB|WEB-DL|BluRay|NF|AMZN|x264|x265|HDR|DV)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
+async function imdbToTitle(imdb, type) {
+  const url = `https://api.themoviedb.org/3/find/${imdb}?api_key=${TMDB_KEY}&external_source=imdb_id`;
+  const data = await fetch(url).then(r => r.json());
+
+  if (type === "movie" && data.movie_results?.length) {
+    return data.movie_results[0].title;
+  }
+
+  if (type === "series" && data.tv_results?.length) {
+    return data.tv_results[0].name;
+  }
+
+  return null;
+}
+
+function cleanTitle(t) {
+  return t.replace(/[\.\-_]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /* ================= SUBTITLES ================= */
 
 app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
-  const { id } = req.params;
-  const { filename, title } = req.query;
+  const { type, id } = req.params;
 
-  let searchQuery = null;
-
-  if (id.startsWith("tt")) {
-    searchQuery = id;
-  } else if (filename) {
-    searchQuery = cleanTitle(filename);
-  } else if (title) {
-    searchQuery = cleanTitle(title);
-  }
-
-  if (!searchQuery) {
-    return res.json({ subtitles: [] });
-  }
-
-  console.log("🔍 Searching subtitles for:", searchQuery);
+  let title = null;
 
   try {
-    const url = `https://www.podnapisi.net/subtitles/search/${encodeURIComponent(searchQuery)}`;
-    const html = await fetch(url).then(r => r.text());
+    if (id.startsWith("tt")) {
+      title = await imdbToTitle(id, type);
+    }
+
+    if (!title) {
+      console.log("❌ TMDB resolve failed for", id);
+      return res.json({ subtitles: [] });
+    }
+
+    title = cleanTitle(title);
+    console.log("🔍 Searching Podnapisi.NET for:", title);
+
+    const searchUrl = `https://www.podnapisi.net/subtitles/search/${encodeURIComponent(title)}`;
+    const html = await fetch(searchUrl).then(r => r.text());
 
     const matches = [...html.matchAll(/\/subtitles\/(\d+)/g)];
 
     const subtitles = matches.slice(0, 5).map(m => ({
       id: m[1],
       lang: "sl",
-      url: `https://www.podnapisi.net/subtitles/${m[1]}/download`,
-      format: "srt"
+      format: "srt",
+      url: `https://www.podnapisi.net/subtitles/${m[1]}/download`
     }));
 
     res.json({ subtitles });
@@ -79,5 +84,5 @@ app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
 /* ================= START ================= */
 
 app.listen(PORT, () => {
-  console.log("✅ Podnapisi.NET filename addon running on", PORT);
+  console.log("✅ Podnapisi.NET TMDB addon running on", PORT);
 });
