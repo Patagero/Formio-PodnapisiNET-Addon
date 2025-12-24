@@ -1,6 +1,12 @@
 {
+  "name": "formio-podnapisinet-addon",
+  "version": "4.2.2",
   "type": "module",
   "scripts": {
     "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
   }
 }
