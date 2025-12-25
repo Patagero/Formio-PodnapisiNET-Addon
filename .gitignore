@@ -1,8 +1,0 @@
-node_modules/
-tmp/
-data/
-.cache/
-.env
-.DS_Store
-npm-debug.log
-package-lock.json
