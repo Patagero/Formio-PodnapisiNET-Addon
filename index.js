@@ -1,88 +1,134 @@
-import express from "express";
-import cors from "cors";
-
-const app = express();
-app.use(cors());
+import http from "http";
+import https from "https";
+import { URL } from "url";
 
 const PORT = process.env.PORT || 10000;
-const TMDB_KEY = process.env.TMDB_API_KEY;
 
 /* ================= MANIFEST ================= */
 
 const manifest = {
-  id: "org.podnapisi.tmdb",
-  version: "4.2.2",
-  name: "Podnapisi.NET (TMDB resolve)",
-  description: "IMDB → TMDB → Title → Podnapisi.NET",
+  id: "org.formio.podnapisi.filename",
+  version: "4.0.0",
+  name: "Podnapisi.NET (filename / title)",
+  description: "Podnapisi.NET HTML search (a4k-style logic)",
   resources: ["subtitles"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
-app.get("/manifest.json", (_, res) => res.json(manifest));
-
 /* ================= HELPERS ================= */
 
-async function imdbToTitle(imdb, type) {
-  const url = `https://api.themoviedb.org/3/find/${imdb}?api_key=${TMDB_KEY}&external_source=imdb_id`;
-  const data = await fetch(url).then(r => r.json());
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
+  "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "sl,en-US;q=0.8,en;q=0.7",
+  "Connection": "keep-alive"
+};
 
-  if (type === "movie" && data.movie_results?.length) {
-    return data.movie_results[0].title;
-  }
-
-  if (type === "series" && data.tv_results?.length) {
-    return data.tv_results[0].name;
-  }
-
-  return null;
+async function fetchText(url) {
+  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: "follow" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.text();
 }
 
-function cleanTitle(t) {
-  return t.replace(/[\.\-_]/g, " ").replace(/\s+/g, " ").trim();
+async function fetchBuffer(url) {
+  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: "follow" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 
-/* ================= SUBTITLES ================= */
+/* ================= PODNAPISI SEARCH ================= */
 
-app.get("/subtitles/:type/:id/:extra?.json", async (req, res) => {
-  const { type, id } = req.params;
+async function searchPodnapisi(title) {
+  const q = encodeURIComponent(title);
+  const url = `https://www.podnapisi.net/sl/ppodnapisi/search?keywords=${q}`;
 
-  let title = null;
+  console.log("🔍 Searching Podnapisi.NET for:", title);
 
+  const html = await fetchText(url);
+
+  const matches = [...html.matchAll(/href="\/subtitles\/([A-Za-z0-9]+)"/g)];
+
+  return [...new Set(matches.map(m => m[1]))].slice(0, 5);
+}
+
+async function resolveDownloadLink(id) {
+  const html = await fetchText(`https://www.podnapisi.net/subtitles/${id}`);
+
+  const m = html.match(/href="(\/subtitles\/download\/[^"]+)"/);
+  if (!m) throw new Error("Download link not found");
+
+  return `https://www.podnapisi.net${m[1]}`;
+}
+
+/* ================= HTTP SERVER ================= */
+
+const server = http.createServer(async (req, res) => {
   try {
-    if (id.startsWith("tt")) {
-      title = await imdbToTitle(id, type);
+    const u = new URL(req.url, `http://${req.headers.host}`);
+
+    /* ---------- manifest ---------- */
+    if (u.pathname === "/manifest.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(manifest));
     }
 
-    if (!title) {
-      console.log("❌ TMDB resolve failed for", id);
-      return res.json({ subtitles: [] });
+    /* ---------- subtitles ---------- */
+    const m = u.pathname.match(/^\/subtitles\/(movie|series)\/(tt\d+)/);
+    if (m) {
+      const imdb = m[2];
+
+      // minimal IMDB → TITLE mapping (DEMO)
+      const TITLE_MAP = {
+        tt0137523: "Fight Club",
+        tt0903747: "Breaking Bad"
+      };
+
+      const title = TITLE_MAP[imdb];
+      if (!title) {
+        return res.end(JSON.stringify({ subtitles: [] }));
+      }
+
+      const ids = await searchPodnapisi(title);
+
+      const subtitles = ids.map(id => ({
+        id,
+        lang: "sl",
+        format: "srt",
+        url: `https://${req.headers.host}/download/${id}`
+      }));
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ subtitles }));
     }
 
-    title = cleanTitle(title);
-    console.log("🔍 Searching Podnapisi.NET for:", title);
+    /* ---------- download ---------- */
+    const d = u.pathname.match(/^\/download\/([A-Za-z0-9]+)/);
+    if (d) {
+      const id = d[1];
+      const link = await resolveDownloadLink(id);
+      const buf = await fetchBuffer(link);
 
-    const searchUrl = `https://www.podnapisi.net/subtitles/search/${encodeURIComponent(title)}`;
-    const html = await fetch(searchUrl).then(r => r.text());
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${id}.zip"`
+      });
+      return res.end(buf);
+    }
 
-    const matches = [...html.matchAll(/\/subtitles\/(\d+)/g)];
+    /* ---------- root ---------- */
+    res.writeHead(200);
+    res.end("Podnapisi.NET filename addon running");
 
-    const subtitles = matches.slice(0, 5).map(m => ({
-      id: m[1],
-      lang: "sl",
-      format: "srt",
-      url: `https://www.podnapisi.net/subtitles/${m[1]}/download`
-    }));
-
-    res.json({ subtitles });
   } catch (e) {
-    console.error(e);
-    res.json({ subtitles: [] });
+    console.error("❌ ERROR:", e.message);
+    res.writeHead(500);
+    res.end("Error");
   }
 });
 
-/* ================= START ================= */
-
-app.listen(PORT, () => {
-  console.log("✅ Podnapisi.NET TMDB addon running on", PORT);
-});
+server.listen(PORT, () =>
+  console.log(`✅ Podnapisi.NET filename addon running on ${PORT}`)
+);
