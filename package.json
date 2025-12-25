@@ -1,12 +1,10 @@
 {
-  "name": "formio-podnapisinet-addon",
-  "version": "4.2.2",
+  "name": "podnapisi-a4k-style",
+  "version": "4.0.0",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "node-fetch": "^3.3.2",
+    "cheerio": "^1.0.0"
   }
 }
