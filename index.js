@@ -1,134 +1,93 @@
-import http from "http";
-import https from "https";
-import { URL } from "url";
+import express from "express";
+import fetch from "node-fetch";
+import * as cheerio from "cheerio";
 
+const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* ================= MANIFEST ================= */
 
 const manifest = {
-  id: "org.formio.podnapisi.filename",
+  id: "org.podnapisi.filename",
   version: "4.0.0",
-  name: "Podnapisi.NET (filename / title)",
-  description: "Podnapisi.NET HTML search (a4k-style logic)",
+  name: "Podnapisi.NET (a4k-style)",
+  description: "Slovenski podnapisi iz Podnapisi.NET (a4k HTML logic)",
   resources: ["subtitles"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
-/* ================= HELPERS ================= */
+app.get("/manifest.json", (req, res) => {
+  res.json(manifest);
+});
 
-const BROWSER_HEADERS = {
+/* ================= HEADERS (CRITICAL) ================= */
+
+const HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+    "Chrome/120.0.0.0 Safari/537.36",
   "Accept":
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "sl,en-US;q=0.8,en;q=0.7",
-  "Connection": "keep-alive"
+  "Accept-Language": "sl-SI,sl,en-US,en;q=0.5",
+  "Referer": "https://www.podnapisi.net/"
 };
 
-async function fetchText(url) {
-  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: "follow" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.text();
-}
+/* ================= SUBTITLES ================= */
 
-async function fetchBuffer(url) {
-  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: "follow" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
-}
+app.get("/subtitles/:type/:id.json", async (req, res) => {
+  const raw = req.params.id;
+  const query = raw.startsWith("tt") ? raw : decodeURIComponent(raw);
 
-/* ================= PODNAPISI SEARCH ================= */
+  console.log("🔍 Searching Podnapisi.NET for:", query);
 
-async function searchPodnapisi(title) {
-  const q = encodeURIComponent(title);
-  const url = `https://www.podnapisi.net/sl/ppodnapisi/search?keywords=${q}`;
-
-  console.log("🔍 Searching Podnapisi.NET for:", title);
-
-  const html = await fetchText(url);
-
-  const matches = [...html.matchAll(/href="\/subtitles\/([A-Za-z0-9]+)"/g)];
-
-  return [...new Set(matches.map(m => m[1]))].slice(0, 5);
-}
-
-async function resolveDownloadLink(id) {
-  const html = await fetchText(`https://www.podnapisi.net/subtitles/${id}`);
-
-  const m = html.match(/href="(\/subtitles\/download\/[^"]+)"/);
-  if (!m) throw new Error("Download link not found");
-
-  return `https://www.podnapisi.net${m[1]}`;
-}
-
-/* ================= HTTP SERVER ================= */
-
-const server = http.createServer(async (req, res) => {
   try {
-    const u = new URL(req.url, `http://${req.headers.host}`);
+    const searchUrl =
+      "https://www.podnapisi.net/subtitles/search/?" +
+      "keywords=" + encodeURIComponent(query) +
+      "&language=sl";
 
-    /* ---------- manifest ---------- */
-    if (u.pathname === "/manifest.json") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(manifest));
-    }
+    const html = await fetch(searchUrl, { headers: HEADERS }).then(r => r.text());
+    const $ = cheerio.load(html);
 
-    /* ---------- subtitles ---------- */
-    const m = u.pathname.match(/^\/subtitles\/(movie|series)\/(tt\d+)/);
-    if (m) {
-      const imdb = m[2];
+    const results = [];
 
-      // minimal IMDB → TITLE mapping (DEMO)
-      const TITLE_MAP = {
-        tt0137523: "Fight Club",
-        tt0903747: "Breaking Bad"
-      };
+    $(".subtitle-entry").each((_, el) => {
+      const title = $(el).find(".title a").text().trim();
+      const page = $(el).find(".title a").attr("href");
 
-      const title = TITLE_MAP[imdb];
-      if (!title) {
-        return res.end(JSON.stringify({ subtitles: [] }));
-      }
+      if (!page) return;
 
-      const ids = await searchPodnapisi(title);
+      const idMatch = page.match(/subtitles\/(\d+)/);
+      if (!idMatch) return;
 
-      const subtitles = ids.map(id => ({
-        id,
+      const subId = idMatch[1];
+
+      results.push({
+        id: "podnapisi-" + subId,
         lang: "sl",
+        name: title,
         format: "srt",
-        url: `https://${req.headers.host}/download/${id}`
-      }));
-
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ subtitles }));
-    }
-
-    /* ---------- download ---------- */
-    const d = u.pathname.match(/^\/download\/([A-Za-z0-9]+)/);
-    if (d) {
-      const id = d[1];
-      const link = await resolveDownloadLink(id);
-      const buf = await fetchBuffer(link);
-
-      res.writeHead(200, {
-        "Content-Type": "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${id}.zip"`
+        url: `https://www.podnapisi.net/subtitles/${subId}/download`
       });
-      return res.end(buf);
-    }
+    });
 
-    /* ---------- root ---------- */
-    res.writeHead(200);
-    res.end("Podnapisi.NET filename addon running");
-
-  } catch (e) {
-    console.error("❌ ERROR:", e.message);
-    res.writeHead(500);
-    res.end("Error");
+    res.json({ subtitles: results });
+  } catch (err) {
+    console.error("❌ ERROR:", err.message);
+    res.json({ subtitles: [] });
   }
 });
 
-server.listen(PORT, () =>
-  console.log(`✅ Podnapisi.NET filename addon running on ${PORT}`)
-);
+/* ================= ROOT ================= */
+
+app.get("/", (req, res) => {
+  res.send("Podnapisi.NET a4k-style addon running");
+});
+
+/* ================= START ================= */
+
+app.listen(PORT, () => {
+  console.log(`✅ Podnapisi.NET addon running on ${PORT}`);
+});
